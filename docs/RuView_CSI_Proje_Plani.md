@@ -120,8 +120,12 @@ idf.py set-target esp32 && idf.py -p /dev/cu.usbserial-0001 -b 115200 flash
 - [x] Doğrulandı: 15 saniyede 121 adet gerçek `CSI_DATA` satırı (subcarrier genlik/faz dizisi) seri porttan okundu.
 - [ ] **Bu değişiklikler (main.cc, sockets_component.h) GitHub Desktop'tan commit + push edilmeli** — kod değişikliği, `sdkconfig.defaults.local` gibi gitignore'da değil.
 - [x] CSI verisini CSV'ye kaydetme scripti hazır: `analysis/capture_csi.py --duration 60` (otomatik `data/csi_<tarih>.csv` oluşturur), test edildi (69 gerçek paket doğru formatta kaydedildi).
-- [ ] Aşağıdaki Kaggle datasetlerini indirip Python analiz pipeline'ını (bandpass + faz analizi) önceden test et, format/ölçek alışkanlığı kazan
-- [ ] Kendi CSI verimizi ESP32-CSI-Tool ile topla: sabit mesafe, oda içi, gönüllü bir kişiden (kendi nefes/kalp atışını) — **gönüllü onamı önemli**, ölçüm sırasında referans olarak akıllı saat/nabız ölçer kullan
+- [x] **İki dataset indirildi ve doğrulandı** (2026-08-18), `data/` altında (git'e girmiyor, `.gitignore`'da — detay: `data/README.md`):
+  - `synthetic_vital_signs/` — sentetik, **kalp atışı BPM etiketli** (17.28M satır), nefes etiketi yok
+  - `ut_har_activity/` — gerçek UT-HAR benchmark, **7 aktivite sınıfı** etiketli (bed/fall/pickup/run/sitdown/standup/walk), 854MB
+  - Elenen adaylar: CSI-Bench (81GB, çok büyük), alanwake12 (etiketsiz çıktı)
+- [ ] Python analiz pipeline'ını (bandpass + faz analizi) bu iki dataset'le önceden test et, format/ölçek alışkanlığı kazan
+- [ ] Kendi CSI verimizi ESP32-CSI-Tool ile topla: sabit mesafe, oda içi, gönüllü bir kişiden (kendi nefes/kalp atışını) — **gönüllü onamı önemli**, ölçüm sırasında referans olarak akıllı saat/nabız ölçer kullan (nefes BPM için tek gerçek ground truth kaynağımız bu olacak, hazır dataset bulunamadı)
 
 ### Faz 3 — Analiz / Model (Vital Bulgular)
 - [ ] Bandpass filtre + faz varyansı + zero-crossing BPM tahmini pipeline'ını kur (Python: `numpy`, `scipy.signal`).
