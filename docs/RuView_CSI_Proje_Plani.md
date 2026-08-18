@@ -119,16 +119,24 @@ idf.py set-target esp32 && idf.py -p /dev/cu.usbserial-0001 -b 115200 flash
 - [x] **Önemli bugfix:** `_components/sockets_component.h` CSI tetiklemek için sabit `192.168.4.1` adresine paket gönderiyordu (orijinal araç iki-ESP32 senaryosu için tasarlanmış — biri AP, biri istemci). Bizim tek-kart + normal router/hotspot senaryomuzda bu IP hiç var olmuyordu, paketler kayboluyor, CSI hiç tetiklenmiyordu. Çözüm: `main.cc`, IP alındığında bağlı olduğu ağın **gateway IP'sini** (`event->ip_info.gw`) `target_ip` global değişkenine yazıyor, `sockets_component.h` artık sabit IP yerine bunu kullanıyor. Bu sayede hangi ağa bağlanırsak bağlanalım (ev/iş/hotspot fark etmez) otomatik doğru hedefe paket gidiyor.
 - [x] Doğrulandı: 15 saniyede 121 adet gerçek `CSI_DATA` satırı (subcarrier genlik/faz dizisi) seri porttan okundu.
 - [ ] **Bu değişiklikler (main.cc, sockets_component.h) GitHub Desktop'tan commit + push edilmeli** — kod değişikliği, `sdkconfig.defaults.local` gibi gitignore'da değil.
-- [ ] CSI verisini bir CSV dosyasına kaydetme (`idf.py monitor | grep CSI_DATA > data/...csv`)
-- [ ] Kaggle datasetleriyle Python analiz pipeline'ını test et
-- [ ] Kendi CSI verimizi topla (gönüllü onamı + referans nabız ölçer ile)
-- [ ] Aşağıdaki Kaggle datasetleriyle Python analiz pipeline'ını (bandpass + faz analizi) önceden test et, format/ölçek alışkanlığı kazan.
-- [ ] Kendi CSI verimizi ESP32-CSI-Tool ile topla: sabit mesafe, oda içi, gönüllü bir kişiden (kendi nefes/kalp atışını) — **gönüllü onamı önemli**, ölçüm sırasında referans olarak akıllı saat/nabız ölçer kullan.
+- [x] CSI verisini CSV'ye kaydetme scripti hazır: `analysis/capture_csi.py --duration 60` (otomatik `data/csi_<tarih>.csv` oluşturur), test edildi (69 gerçek paket doğru formatta kaydedildi).
+- [ ] Aşağıdaki Kaggle datasetlerini indirip Python analiz pipeline'ını (bandpass + faz analizi) önceden test et, format/ölçek alışkanlığı kazan
+- [ ] Kendi CSI verimizi ESP32-CSI-Tool ile topla: sabit mesafe, oda içi, gönüllü bir kişiden (kendi nefes/kalp atışını) — **gönüllü onamı önemli**, ölçüm sırasında referans olarak akıllı saat/nabız ölçer kullan
 
-### Faz 3 — Analiz / Model
+### Faz 3 — Analiz / Model (Vital Bulgular)
 - [ ] Bandpass filtre + faz varyansı + zero-crossing BPM tahmini pipeline'ını kur (Python: `numpy`, `scipy.signal`).
 - [ ] Referans ölçümle (akıllı saat/pulse oksimetre) doğruluğu karşılaştır.
-- [ ] "Öğretmen" (teacher model) konusu netleşirse — eğer bilgi damıtma (knowledge distillation) kastediliyorsa, büyük bir modelden ESP32 üzerinde çalışabilecek küçük modele aktarım değerlendirilebilir.
+
+### Faz 3.5 — Aktif Hareket / Uzuv Takibi (2026-08-18'de eklendi, kapsam genişletildi)
+
+**Kullanıcı talebi:** Nabız/nefes yanında **aktif hareket ve uzuv hareketlerini** de takip etmek, RuView'deki gibi görsel/animasyonlu bir arayüzde izlemek.
+
+**Önemli fark:** Nabız/nefes basit sinyal işleme ile çıkarılabiliyor. Uzuv/poz takibi ise RuView'in kendisinde bile **eğitilmiş bir ML modeli** (17-keypoint pose estimation) gerektiriyor — basit filtreyle yapılamaz. Bu, yöneticinin bahsettiği "öğretmen" kelimesinin ML'deki **teacher model / bilgi damıtma** anlamına geldiği ihtimalini güçlendiriyor (bkz. Açık Sorular #2).
+
+**Kademeli, gerçekçi yaklaşım (hepsini bir anda yapmaya çalışmak yerine):**
+1. **Aktivite sınıflandırma (daha kolay, önce bu):** CSI'dan "hareket var/yok", "hangi genel aktivite" (yürüme, oturma, el sallama vb.) gibi kaba sınıflandırma — Kaggle'daki ARIL/UT_HAR gibi aktivite-tanıma datasetleriyle eğitilebilir, klasik ML (SVM/Random Forest) veya küçük bir sinir ağı yeterli olabilir.
+2. **İnce uzuv/poz takibi (zor, sonra):** Gerçek keypoint/iskelet çıkarımı — bunun için özel dataset + model eğitimi + muhtemelen "teacher-student" bilgi damıtma gerekecek (büyük model → ESP32'de çalışabilecek küçük model). Bu aşamanın kapsamı yöneticiyle netleşmeden tam plana dökülemez.
+3. **Görsel/animasyonlu arayüz (en son):** Kullanıcının kendi isteği doğrultusunda, tüm veri/model tarafı oturduktan sonra yapılacak — canlı CSI/BPM/hareket verisini gösteren bir web arayüzü (muhtemelen Python backend + basit web frontend).
 
 ### Faz 4 — Rapor / Sunum
 - [ ] Sonuçları [[project_bitirme_tezi]] belgesindeki mevcut tez yapısına nasıl entegre edileceğini planla (eğer bu iş tez kapsamındaysa).
@@ -158,7 +166,7 @@ Akademik (Kaggle dışı) vital-bulgu odaklı kaynaklar (talep üzerine erişim 
 ## 6. Açık Sorular / Yöneticiye Sorulacaklar
 
 1. **[Öncelikli]** RuView reposunun (github.com/ruvnet/RuView) kodunu mu çalıştırdın, yoksa başka bir CSI aracı mı kullandın? Kullandığın kartta chip kimliği ne yazıyordu (esptool/Arduino IDE çıktısı)?
-2. "Öğretmen" derken akademik danışman mı, yoksa ML'de "teacher model" (bilgi damıtma) mı kastedildi?
+2. "Öğretmen" derken akademik danışman mı, yoksa ML'de "teacher model" (bilgi damıtma) mı kastedildi? **(2026-08-18 güncelleme: kullanıcı uzuv/poz takibi de istediğini belirtti — bu ihtimali güçlendiriyor, çünkü poz takibi gerçekten teacher-student model eğitimi gerektirebilir.)**
 3. Proje bir bitirme tezi kapsamında mı, yoksa şirket içi bağımsız Ar-Ge mi? (İnsan vital verisi toplamak için etik/onam süreci gerekebilir.)
 4. Hedef ortam ne — tek oda içi demo mu, gerçek duvar-arkası senaryo mu?
 5. S3/C6 kartı temin edilecek mi, yoksa proje tamamen elimizdeki DevKitV1 ile mi sürdürülecek?
