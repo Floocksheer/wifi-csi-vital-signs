@@ -1,0 +1,33 @@
+# README'nin istediği zorunlu ayarlar (docs/RuView_CSI_Proje_Plani.md Faz 1)
+
+# Serial flasher config > 'idf.py monitor' baud rate > Custom Baud Rate = 921600
+CONFIG_ESPTOOLPY_MONITOR_BAUD_OTHER=y
+CONFIG_ESPTOOLPY_MONITOR_BAUD_OTHER_VAL=921600
+CONFIG_MONITOR_BAUD_OTHER=y
+CONFIG_MONITOR_BAUD_OTHER_VAL=921600
+
+# Component config > Common ESP32-related > Channel for console output > Custom UART, baud 921600
+CONFIG_ESP_CONSOLE_UART_CUSTOM=y
+CONFIG_ESP_CONSOLE_UART_BAUDRATE=921600
+CONFIG_CONSOLE_UART_CUSTOM=y
+CONFIG_CONSOLE_UART_BAUDRATE=921600
+
+# Component config > Wi-Fi > WiFi CSI (Channel State Information)
+CONFIG_ESP32_WIFI_CSI_ENABLED=y
+
+# Component config > FreeRTOS > Tick rate (Hz)
+CONFIG_FREERTOS_HZ=1000
+
+# ESP32 CSI Tool Config: tek kartlı kurulumumuzda bu kart CSI toplasın
+CONFIG_SHOULD_COLLECT_CSI=y
+CONFIG_SHOULD_COLLECT_ONLY_LLTF=y
+CONFIG_SEND_CSI_TO_SERIAL=y
+CONFIG_SEND_CSI_TO_SD=n
+
+# GERÇEK WiFi SSID/şifreleri BURAYA YAZILMAZ (bu dosya git'e girer).
+# Gerçek bilgiler için: cp sdkconfig.defaults.local.example sdkconfig.defaults.local
+# ve o dosyayı doldur (git'e girmez, bkz. .gitignore).
+CONFIG_ESP_WIFI_SSID="myssid"
+CONFIG_ESP_WIFI_PASSWORD="mypassword"
+CONFIG_ESP_WIFI_SSID_2=""
+CONFIG_ESP_WIFI_PASSWORD_2=""

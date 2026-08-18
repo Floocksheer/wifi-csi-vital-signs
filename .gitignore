@@ -1,0 +1,19 @@
+# Python
+analysis/venv/
+analysis/__pycache__/
+*.pyc
+
+# ESP-IDF build artifacts
+firmware/**/build/
+firmware/**/sdkconfig
+firmware/**/sdkconfig.old
+
+# Gerçek WiFi şifreleri - ASLA git'e girmez, her makinede yerel kalır
+firmware/**/sdkconfig.defaults.local
+
+# Data (genelde büyük, git'e koymuyoruz)
+data/*
+!data/.gitkeep
+
+# macOS
+.DS_Store

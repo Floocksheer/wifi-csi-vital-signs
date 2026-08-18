@@ -1,0 +1,13 @@
+# Bu dosyayı "sdkconfig.defaults.local" olarak kopyala ve gerçek bilgilerle doldur:
+#   cp sdkconfig.defaults.local.example sdkconfig.defaults.local
+#
+# sdkconfig.defaults.local .gitignore'da - GİT'E GİRMEZ, sadece bu bilgisayarda kalır.
+# Her makinede (iş yeri / ev laptopu) bu dosyayı o makineye özel doldurman yeterli.
+
+# Birinci ağ (öncelikli denenir)
+CONFIG_ESP_WIFI_SSID="GERCEK_AG_ADI_1"
+CONFIG_ESP_WIFI_PASSWORD="GERCEK_SIFRE_1"
+
+# İkinci ağ (birinci ağa 5 başarısız denemeden sonra otomatik geçilir)
+CONFIG_ESP_WIFI_SSID_2="GERCEK_AG_ADI_2"
+CONFIG_ESP_WIFI_PASSWORD_2="GERCEK_SIFRE_2"
