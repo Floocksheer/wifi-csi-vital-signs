@@ -15,11 +15,14 @@
 
 char *data = (char *) "1\n";
 
+// main.cc'de tanımlı: bağlandığımız ağın gateway IP'si (IP alınınca otomatik güncellenir)
+extern char target_ip[16];
+
 void socket_transmitter_sta_loop(bool (*is_wifi_connected)()) {
     int socket_fd = -1;
     while (1) {
         close(socket_fd);
-        char *ip = (char *) "192.168.4.1";
+        char *ip = target_ip;
         struct sockaddr_in caddr;
         caddr.sin_family = AF_INET;
         caddr.sin_port = htons(2223);

@@ -68,6 +68,10 @@
 /* FreeRTOS event group to signal when we are connected*/
 static EventGroupHandle_t s_wifi_event_group;
 
+// CSI tetiklemek için paket gönderdiğimiz hedef IP. Sabit "192.168.4.1" yerine
+// bağlandığımız ağın gateway'i (her ağda otomatik doğru, her zaman ulaşılabilir).
+char target_ip[16] = "192.168.4.1";
+
 /* The event group allows multiple bits for each event, but we only care about one event
  * - are we connected to the AP with an IP? */
 const int WIFI_CONNECTED_BIT = BIT0;
@@ -123,9 +127,10 @@ static void event_handler(void* arg, esp_event_base_t event_base,
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
         esp_wifi_connect();
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
+        wifi_event_sta_disconnected_t* disconn = (wifi_event_sta_disconnected_t*) event_data;
         consecutive_fail_count++;
-        ESP_LOGI(TAG, "Bağlantı koptu/başarısız (deneme %d/%d, ağ %d)",
-                 consecutive_fail_count, WIFI_FAILS_BEFORE_SWITCH, active_network_idx + 1);
+        ESP_LOGI(TAG, "Bağlantı koptu/başarısız (deneme %d/%d, ağ %d, reason=%d)",
+                 consecutive_fail_count, WIFI_FAILS_BEFORE_SWITCH, active_network_idx + 1, disconn->reason);
 
         if (has_second_network && consecutive_fail_count >= WIFI_FAILS_BEFORE_SWITCH) {
             active_network_idx = (active_network_idx == 0) ? 1 : 0;
@@ -137,7 +142,9 @@ static void event_handler(void* arg, esp_event_base_t event_base,
         xEventGroupClearBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t* event = (ip_event_got_ip_t*) event_data;
-        ESP_LOGI(TAG, "Got ip:" IPSTR " (ağ %d)", IP2STR(&event->ip_info.ip), active_network_idx + 1);
+        snprintf(target_ip, sizeof(target_ip), IPSTR, IP2STR(&event->ip_info.gw));
+        ESP_LOGI(TAG, "Got ip:" IPSTR " (ağ %d), CSI hedefi (gateway): %s",
+                 IP2STR(&event->ip_info.ip), active_network_idx + 1, target_ip);
         consecutive_fail_count = 0;
         xEventGroupSetBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
     }

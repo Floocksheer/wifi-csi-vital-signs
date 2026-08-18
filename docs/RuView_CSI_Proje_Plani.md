@@ -113,7 +113,15 @@ rm -f sdkconfig sdkconfig.old
 idf.py set-target esp32 && idf.py -p /dev/cu.usbserial-0001 -b 115200 flash
 ```
 
-### Faz 2 — Veri Toplama (Kaggle + kendi verimiz)
+### Faz 2 — Veri Toplama (Kaggle + kendi verimiz) — BAŞLADI (2026-08-18)
+
+- [x] Gerçek WiFi bağlantısı kuruldu (telefon hotspot, yönetici onayıyla geçici çözüm — iş yeri ağı gelince `sdkconfig.defaults.local`'a ikinci ağ olarak eklenecek)
+- [x] **Önemli bugfix:** `_components/sockets_component.h` CSI tetiklemek için sabit `192.168.4.1` adresine paket gönderiyordu (orijinal araç iki-ESP32 senaryosu için tasarlanmış — biri AP, biri istemci). Bizim tek-kart + normal router/hotspot senaryomuzda bu IP hiç var olmuyordu, paketler kayboluyor, CSI hiç tetiklenmiyordu. Çözüm: `main.cc`, IP alındığında bağlı olduğu ağın **gateway IP'sini** (`event->ip_info.gw`) `target_ip` global değişkenine yazıyor, `sockets_component.h` artık sabit IP yerine bunu kullanıyor. Bu sayede hangi ağa bağlanırsak bağlanalım (ev/iş/hotspot fark etmez) otomatik doğru hedefe paket gidiyor.
+- [x] Doğrulandı: 15 saniyede 121 adet gerçek `CSI_DATA` satırı (subcarrier genlik/faz dizisi) seri porttan okundu.
+- [ ] **Bu değişiklikler (main.cc, sockets_component.h) GitHub Desktop'tan commit + push edilmeli** — kod değişikliği, `sdkconfig.defaults.local` gibi gitignore'da değil.
+- [ ] CSI verisini bir CSV dosyasına kaydetme (`idf.py monitor | grep CSI_DATA > data/...csv`)
+- [ ] Kaggle datasetleriyle Python analiz pipeline'ını test et
+- [ ] Kendi CSI verimizi topla (gönüllü onamı + referans nabız ölçer ile)
 - [ ] Aşağıdaki Kaggle datasetleriyle Python analiz pipeline'ını (bandpass + faz analizi) önceden test et, format/ölçek alışkanlığı kazan.
 - [ ] Kendi CSI verimizi ESP32-CSI-Tool ile topla: sabit mesafe, oda içi, gönüllü bir kişiden (kendi nefes/kalp atışını) — **gönüllü onamı önemli**, ölçüm sırasında referans olarak akıllı saat/nabız ölçer kullan.
 
