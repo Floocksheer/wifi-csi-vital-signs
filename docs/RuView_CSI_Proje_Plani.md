@@ -131,7 +131,8 @@ idf.py set-target esp32 && idf.py -p /dev/cu.usbserial-0001 -b 115200 flash
 - [x] **İlk pipeline kuruldu ve test edildi:** `analysis/bpm_pipeline.py` (bandpass filtre + zero-crossing/FFT BPM tahmini), `analysis/evaluate_heart_rate_synthetic.py` (değerlendirme scripti).
 - [x] **İlk sonuç (sentetik dataset, 20×10sn pencere):** zero-crossing yöntemi ortalama **8.62 BPM hata**, FFT yöntemi 12.56 BPM hata — zero-crossing daha iyi performans gösterdi, kısa pencerede FFT'nin frekans çözünürlüğü yetersiz kalıyor. Bu, algoritmanın makul çalıştığını gösteren ilk kanıt (kavram kanıtı), literatürdeki daha sofistike yöntemler (<4 BPM hata) kadar iyi değil ama başlangıç için iyi.
 - [ ] Nefes bandı (0.1-0.5Hz) için de aynı değerlendirmeyi yap — ama sentetik dataset'te nefes etiketi olmadığı için sadece "sinyal periyodik mi" diye görsel kontrol yapılabilir, gerçek doğrulama kendi verimizle olacak.
-- [ ] UT-HAR ile aktivite sınıflandırma pipeline'ını kur (Faz 3.5'in ilk adımı).
+- [x] **UT-HAR aktivite sınıflandırma pipeline'ı kuruldu ve test edildi (2026-08-19):** `analysis/train_activity_classifier.py` — her subcarrier için özet istatistik (mean/std/min/max, 360 özellik) + Random Forest. **Sonuç: VAL %97.8, TEST %95.2 doğruluk** (7 sınıf: bed, fall, pickup, run, sitdown, standup, walk). En zayıf sınıf "standup" (%80 recall, sitdown ile karışıyor). Bu, literatürdeki gelişmiş modellere yakın, basit bir yöntemle elde edildi — Faz 3.5'in ilk adımı için güçlü bir kavram kanıtı.
+- [ ] **Önemli kısıt:** UT-HAR formatı (90 özellik = Intel 5300, 30 subcarrier×3 anten) bizim ESP32'mizden (256 ham değer/paket) çok farklı — model doğrudan bizim donanımımıza aktarılamaz, ama **yöntem** (özellik çıkarımı + RF) kendi verimize uygulanabilir.
 - [ ] Referans ölçümle (akıllı saat/pulse oksimetre, kendi verimiz) doğruluğu karşılaştır.
 
 ### Faz 3.5 — Aktif Hareket / Uzuv Takibi (2026-08-18'de eklendi, kapsam genişletildi)
