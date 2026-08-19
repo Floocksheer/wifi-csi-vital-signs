@@ -127,9 +127,12 @@ idf.py set-target esp32 && idf.py -p /dev/cu.usbserial-0001 -b 115200 flash
 - [ ] Python analiz pipeline'ını (bandpass + faz analizi) bu iki dataset'le önceden test et, format/ölçek alışkanlığı kazan
 - [ ] Kendi CSI verimizi ESP32-CSI-Tool ile topla: sabit mesafe, oda içi, gönüllü bir kişiden (kendi nefes/kalp atışını) — **gönüllü onamı önemli**, ölçüm sırasında referans olarak akıllı saat/nabız ölçer kullan (nefes BPM için tek gerçek ground truth kaynağımız bu olacak, hazır dataset bulunamadı)
 
-### Faz 3 — Analiz / Model (Vital Bulgular)
-- [ ] Bandpass filtre + faz varyansı + zero-crossing BPM tahmini pipeline'ını kur (Python: `numpy`, `scipy.signal`).
-- [ ] Referans ölçümle (akıllı saat/pulse oksimetre) doğruluğu karşılaştır.
+### Faz 3 — Analiz / Model (Vital Bulgular) — BAŞLADI (2026-08-18)
+- [x] **İlk pipeline kuruldu ve test edildi:** `analysis/bpm_pipeline.py` (bandpass filtre + zero-crossing/FFT BPM tahmini), `analysis/evaluate_heart_rate_synthetic.py` (değerlendirme scripti).
+- [x] **İlk sonuç (sentetik dataset, 20×10sn pencere):** zero-crossing yöntemi ortalama **8.62 BPM hata**, FFT yöntemi 12.56 BPM hata — zero-crossing daha iyi performans gösterdi, kısa pencerede FFT'nin frekans çözünürlüğü yetersiz kalıyor. Bu, algoritmanın makul çalıştığını gösteren ilk kanıt (kavram kanıtı), literatürdeki daha sofistike yöntemler (<4 BPM hata) kadar iyi değil ama başlangıç için iyi.
+- [ ] Nefes bandı (0.1-0.5Hz) için de aynı değerlendirmeyi yap — ama sentetik dataset'te nefes etiketi olmadığı için sadece "sinyal periyodik mi" diye görsel kontrol yapılabilir, gerçek doğrulama kendi verimizle olacak.
+- [ ] UT-HAR ile aktivite sınıflandırma pipeline'ını kur (Faz 3.5'in ilk adımı).
+- [ ] Referans ölçümle (akıllı saat/pulse oksimetre, kendi verimiz) doğruluğu karşılaştır.
 
 ### Faz 3.5 — Aktif Hareket / Uzuv Takibi (2026-08-18'de eklendi, kapsam genişletildi)
 
