@@ -27,6 +27,17 @@ def estimate_bpm_zero_crossing(raw_signal, fs, band=HEART_RATE_BAND):
     return (num_cycles / duration_sec) * 60
 
 
+def combine_phase_subcarriers(phase_matrix):
+    """(zaman, subcarrier) faz matrisini -> tek boyutlu ortalama faz sinyaline indirger.
+
+    Faz her subcarrier için ayrı ayrı unwrap edilir (zaman ekseninde), sonra ortalanır.
+    synthetic_vital_signs testinde amplitude ortalamasından daha iyi sonuç verdi
+    (2026-08-19: 7.32 BPM hata, amplitude ortalamasıyla 8.62 BPM'e karşı).
+    """
+    unwrapped = np.unwrap(phase_matrix, axis=0)
+    return unwrapped.mean(axis=1)
+
+
 def estimate_bpm_fft(raw_signal, fs, band=HEART_RATE_BAND):
     """Ham sinyalden bandpass filtre + FFT tepe frekansı ile BPM tahmini."""
     sos = signal.butter(4, band, btype="bandpass", fs=fs, output="sos")
