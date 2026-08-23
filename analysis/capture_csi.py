@@ -12,6 +12,8 @@ import time
 
 import serial
 
+from packet_flooder import PacketFlooder, DEFAULT_ESP_IP
+
 HEADER = (
     "type,role,mac,rssi,rate,sig_mode,mcs,bandwidth,smoothing,not_sounding,"
     "aggregation,stbc,fec_coding,sgi,noise_floor,ampdu_cnt,channel,"
@@ -27,6 +29,10 @@ def main():
     parser.add_argument("--duration", type=float, default=30, help="Kaç saniye kaydedilecek")
     parser.add_argument("--output", default=None, help="Çıktı CSV yolu (verilmezse otomatik isimlendirilir)")
     parser.add_argument("--reset", action="store_true", help="Başlamadan önce kartı resetle (RTS/DTR ile)")
+    parser.add_argument("--esp-ip", default=DEFAULT_ESP_IP,
+                        help="ESP32'nin IP'si - buraya UDP paketi göndererek CSI hızı ~15 kat artıyor")
+    parser.add_argument("--no-flood", action="store_true",
+                        help="Paket göndermeyi kapat (sadece beacon'lardan CSI, ~3-10 Hz)")
     args = parser.parse_args()
 
     if args.output is None:
@@ -47,24 +53,36 @@ def main():
         time.sleep(0.1)
 
     csi_count = 0
-    end_time = time.time() + args.duration
+    flooder = None
+    if not args.no_flood:
+        flooder = PacketFlooder(esp_ip=args.esp_ip).start()
+        time.sleep(0.5)  # akışın oturması için
 
-    with open(output_path, "w") as f:
-        f.write(HEADER)
-        print(f"Kayıt başladı -> {output_path} ({args.duration:.0f} saniye)")
-        while time.time() < end_time:
-            line = ser.readline()
-            if not line:
-                continue
-            text = line.decode("utf-8", errors="replace").rstrip()
-            if text.startswith("CSI_DATA"):
-                f.write(text + "\n")
-                csi_count += 1
-                if csi_count % 20 == 0:
-                    print(f"  {csi_count} paket kaydedildi...")
+    try:
+        end_time = time.time() + args.duration
+        with open(output_path, "w") as f:
+            f.write(HEADER)
+            mode = "beacon-only" if args.no_flood else f"flood -> {args.esp_ip}"
+            print(f"Kayıt başladı -> {output_path} ({args.duration:.0f} saniye, {mode})")
+            while time.time() < end_time:
+                line = ser.readline()
+                if not line:
+                    continue
+                text = line.decode("utf-8", errors="replace").rstrip()
+                if text.startswith("CSI_DATA"):
+                    f.write(text + "\n")
+                    csi_count += 1
+                    if csi_count % 200 == 0:
+                        print(f"  {csi_count} paket kaydedildi...")
+    finally:
+        if flooder:
+            flooder.stop()
+        ser.close()
 
-    ser.close()
-    print(f"Bitti. Toplam {csi_count} CSI paketi -> {output_path}")
+    rate = csi_count / args.duration
+    print(f"Bitti. Toplam {csi_count} CSI paketi ({rate:.1f} Hz) -> {output_path}")
+    if rate < 20 and not args.no_flood:
+        print("  UYARI: Hız düşük. ESP32 IP'si doğru mu? Sinyal gücü yeterli mi (RSSI > -70 dBm)?")
 
 
 if __name__ == "__main__":

@@ -171,6 +171,28 @@ idf.py set-target esp32 && idf.py -p /dev/cu.usbserial-0001 -b 115200 flash
 2. **İnce uzuv/poz takibi (zor, sonra):** Gerçek keypoint/iskelet çıkarımı — bunun için özel dataset + model eğitimi + muhtemelen "teacher-student" bilgi damıtma gerekecek (büyük model → ESP32'de çalışabilecek küçük model). Bu aşamanın kapsamı yöneticiyle netleşmeden tam plana dökülemez.
 3. **Görsel/animasyonlu arayüz (en son):** Kullanıcının kendi isteği doğrultusunda, tüm veri/model tarafı oturduktan sonra yapılacak — canlı CSI/BPM/hareket verisini gösteren bir web arayüzü (muhtemelen Python backend + basit web frontend).
 
+### Faz 3.6 — Canlı Sistem, Kritik Bulgular (2026-08-19)
+
+**Canlı gösterge kuruldu:** `analysis/live_server.py` (Flask + seri okuma, http://localhost:5050) — 2 saniyelik pencere, saniyede bir güncelleme, hareket kapısı + güven eşiği mimarisi. `analysis/activity_features.py` ortak özellik modülü, `analysis/save_activity_model.py` model eğitimi.
+
+**BULGU 1 — Duruş (otur/ayakta) sınıflandırması oturumlar arası ÇALIŞMIYOR.** Canlı testte model sürekli "AYAKTA" dedi. Teşhis için taze kayıtlar alınıp eğitim verisiyle karşılaştırıldı:
+- Eğitim verisi genlik seviyesi: otur 19.14, ayakta 18.84 → **sınıflar arası fark 0.30**
+- 2 saat sonraki taze kayıt: otur 20.55, ayakta 21.02 → **ortam kayması ~1.7**
+- Kayma, sınıf farkının **5 katı**; üstelik ilişki tersine dönmüş (eğitimde otur>ayakta, tazede otur<ayakta)
+- Üç normalizasyon yöntemi denendi (ham / ortalamaya bölme / z-skor şekil): oturum-içi LOO %75-77 verirken **taze oturumda üçü de %50 (rastgele)**, hepsi her şeye "ayakta" dedi.
+- **Sonuç:** Aynı oturum içindeki %75'lik LOO sonucu yanıltıcıymış. Tek antenli ESP32 ile ~9.5 Hz'de statik duruş ayrımı, oturumlar arası güvenilir değil. Bu, poz/iskelet takibindeki kısıtla aynı türden bir donanım/fizik sınırı.
+
+**BULGU 2 — Hareket tespiti güvenilir çalışıyor.** `movement_energy` (ardışık paketler arası ortalama mutlak değişim) canlı testte kullanıcı tarafından doğrulandı: sabit 0.9-1.5, hafif hareket 1.8-2.5, ani hareket 3-5.5. Eşik 3.3 doğru kalibre. Fiziğe dayalı olduğu için ortam kaymasından etkilenmiyor.
+
+**BULGU 3 — Örnekleme hızı, aracın tasarım hızının ~10 katı altında.** `CONFIG_PACKET_RATE=100` ayarlı olmasına rağmen gerçekte ~9.5 Hz alınıyor. Sebep: **CSI, gönderdiğimiz paketlerden değil, karta GELEN çerçevelerden üretiliyor** — 9.5 Hz, standart WiFi beacon aralığına (100ms) denk, yani sinyal beacon'lardan geliyor.
+- Telefon hotspot (yakın, RSSI -31..-61 dBm): **9.5 Hz**
+- Ev router (uzak, RSSI **-77 dBm**): 2.4-3.9 Hz → sinyal gücü kritik, uzak router daha kötü
+- Laptop'tan UDP flood: 1.6 kat artış (2.4→3.9 Hz), yüksek hızı açmıyor
+- **Yüksek hız için tek yol: ikinci ESP32'yi `active_ap` modunda özel erişim noktası yapmak** (aracın tasarlandığı kullanım). Literatürdeki ESP32 HAR projeleri bu şekilde 100 Hz alıyor.
+- **Değerlendirme: Bu, projedeki en yüksek getirili yatırım (~150-200 TL).** Düşük örnekleme hızı, hem duruş ayrımının tutmamasının hem BPM'in sınırda kalmasının muhtemel ana sebebi.
+
+**Dataset araştırması (tekrar):** Bizimle aynı donanımı kullanan bir dataset arandı — [IEEE DataPort Multi-Human HAR](https://ieee-dataport.org/documents/channel-state-information-dataset-multi-human-activity-recognition-indoor-environments) (ESP32-Nodemcu + ESP32-CSI-Toolkit, 80+ katılımcı, 6 aktivite, 270MB) **abonelik gerektiriyor** — üniversite hesabıyla erişim denenebilir. [Wi-ESP](https://wrlab.github.io/Wi-ESP/) dataset'i henüz yayınlanmamış. **Ama BULGU 1 ışığında:** başkasının ortamında toplanmış veri, bizim ortamımızda duruş ayrımı yapamaz (kendi verimiz bile 2 saat sonra transfer olmadı). Bu tür dataset'ler yöntem doğrulama/ön-eğitim için değerli, "indir ve çalıştır" için değil.
+
 ### Faz 4 — Rapor / Sunum
 - [ ] Sonuçları [[project_bitirme_tezi]] belgesindeki mevcut tez yapısına nasıl entegre edileceğini planla (eğer bu iş tez kapsamındaysa).
 - [ ] Yöntem farkını (RuView'in kendisi değil, RuView'den ilham alan kendi implementasyonumuz olduğunu) rapor/sunumda açıkça belirt — akademik dürüstlük açısından önemli.
