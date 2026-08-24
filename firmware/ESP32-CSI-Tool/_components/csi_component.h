@@ -2,11 +2,18 @@
 #define ESP32_CSI_CSI_COMPONENT_H
 
 #include "time_component.h"
+#include "csi_udp_component.h"
 #include "math.h"
 #include <sstream>
 #include <iostream>
 
 char *project_type;
+
+// Her kartın kendi kimliği: "STA-9d9c" gibi (kendi MAC'inin son 2 baytı).
+// İki kart aynı sunucuya veri gönderdiği için ayırt edilmeleri gerekiyor.
+// Mevcut "role" sütununu kullanıyoruz -> CSV format DEĞİŞMİYOR, eski
+// analiz kodları olduğu gibi çalışmaya devam ediyor.
+static char board_role[24] = "STA";
 
 #define CSI_RAW 1
 #define CSI_AMPLITUDE 0
@@ -78,8 +85,19 @@ int8_t *my_ptr;
 #endif
     ss << "]\n";
 
-    printf(ss.str().c_str());
+    std::string line = ss.str();
+
+#if CONFIG_SEND_CSI_TO_UDP
+    csi_udp_enqueue(line.c_str(), line.size());
+#endif
+
+#if CONFIG_SEND_CSI_TO_SERIAL
+    // Seri port 921600 baud'da ~92 KB/s taşıyor; 100 Hz'de CSI ~80 KB/s.
+    // UDP kullanılıyorsa seri çıkışı kapatmak CPU ve bant genişliği kazandırır.
+    printf(line.c_str());
     fflush(stdout);
+#endif
+
     vTaskDelay(0);
     xSemaphoreGive(mutex);
 }
@@ -90,7 +108,20 @@ void _print_csi_csv_header() {
 }
 
 void csi_init(char *type) {
-    project_type = type;
+    // Kendi MAC'imizden kimlik üret: role = "STA-9d9c"
+    uint8_t own_mac[6] = {0};
+    if (esp_wifi_get_mac(WIFI_IF_STA, own_mac) == ESP_OK) {
+        snprintf(board_role, sizeof(board_role), "%s-%02x%02x", type,
+                 own_mac[4], own_mac[5]);
+    } else {
+        snprintf(board_role, sizeof(board_role), "%s", type);
+    }
+    project_type = board_role;
+    printf("BOARD_ROLE: %s\n", board_role);
+
+#if CONFIG_SEND_CSI_TO_UDP
+    csi_udp_init();
+#endif
 
 #ifdef CONFIG_SHOULD_COLLECT_CSI
     ESP_ERROR_CHECK(esp_wifi_set_csi(1));

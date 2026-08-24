@@ -17,3 +17,7 @@ data/*
 
 # macOS
 .DS_Store
+
+# Yerel yedek yapılandırmalar (makineye özel, sırlar içerir)
+*.apbak
+*.bak

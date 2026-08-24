@@ -12,6 +12,7 @@ import time
 
 import serial
 
+from esp_port import detect_port
 from packet_flooder import PacketFlooder, DEFAULT_ESP_IP
 
 HEADER = (
@@ -24,16 +25,21 @@ HEADER = (
 
 def main():
     parser = argparse.ArgumentParser(description="ESP32 CSI verisini kaydet")
-    parser.add_argument("--port", default="/dev/cu.usbserial-0001")
+    parser.add_argument("--port", default=None,
+                        help="Veri toplayan kartın portu (verilmezse otomatik bulunur)")
     parser.add_argument("--baud", type=int, default=921600)
     parser.add_argument("--duration", type=float, default=30, help="Kaç saniye kaydedilecek")
     parser.add_argument("--output", default=None, help="Çıktı CSV yolu (verilmezse otomatik isimlendirilir)")
     parser.add_argument("--reset", action="store_true", help="Başlamadan önce kartı resetle (RTS/DTR ile)")
     parser.add_argument("--esp-ip", default=DEFAULT_ESP_IP,
-                        help="ESP32'nin IP'si - buraya UDP paketi göndererek CSI hızı ~15 kat artıyor")
-    parser.add_argument("--no-flood", action="store_true",
-                        help="Paket göndermeyi kapat (sadece beacon'lardan CSI, ~3-10 Hz)")
+                        help="Sadece --flood ile birlikte kullanılır: ESP32'nin IP'si")
+    parser.add_argument("--flood", action="store_true",
+                        help="Laptop'tan ek UDP paketi gönder. 2. ESP32 (özel AP) mimarisinde "
+                             "GEREKMİYOR ve hızı düşürüyor (ölçüldü: 82-101 Hz -> 67 Hz) - firmware'in "
+                             "kendi STA->AP trafiği zaten yeterli. Sadece tek kartla ev wifi'si/hotspot'a "
+                             "bağlıyken (~3-10 Hz beacon-only) hızı artırmak için kullan.")
     args = parser.parse_args()
+    args.port = detect_port(args.port)
 
     if args.output is None:
         data_dir = pathlib.Path(__file__).resolve().parent.parent / "data"
@@ -54,7 +60,7 @@ def main():
 
     csi_count = 0
     flooder = None
-    if not args.no_flood:
+    if args.flood:
         flooder = PacketFlooder(esp_ip=args.esp_ip).start()
         time.sleep(0.5)  # akışın oturması için
 
@@ -62,7 +68,7 @@ def main():
         end_time = time.time() + args.duration
         with open(output_path, "w") as f:
             f.write(HEADER)
-            mode = "beacon-only" if args.no_flood else f"flood -> {args.esp_ip}"
+            mode = f"flood -> {args.esp_ip}" if args.flood else "normal (flood yok)"
             print(f"Kayıt başladı -> {output_path} ({args.duration:.0f} saniye, {mode})")
             while time.time() < end_time:
                 line = ser.readline()
@@ -81,8 +87,9 @@ def main():
 
     rate = csi_count / args.duration
     print(f"Bitti. Toplam {csi_count} CSI paketi ({rate:.1f} Hz) -> {output_path}")
-    if rate < 20 and not args.no_flood:
-        print("  UYARI: Hız düşük. ESP32 IP'si doğru mu? Sinyal gücü yeterli mi (RSSI > -70 dBm)?")
+    if rate < 30:
+        print("  UYARI: Hız düşük (2. ESP32 AP mimarisinde 80-100+ Hz beklenir).")
+        print("  Kontrol et: ESP32_CSI_AP'ye bağlı mı, RSSI yeterli mi, --flood deneyip fark var mı?")
 
 
 if __name__ == "__main__":

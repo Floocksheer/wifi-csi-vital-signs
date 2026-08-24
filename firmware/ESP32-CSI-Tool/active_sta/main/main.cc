@@ -95,6 +95,14 @@ static void apply_wifi_credentials(uint8_t idx) {
         strlcpy((char *) wifi_config.sta.password, ESP_WIFI_PASS_2, sizeof(wifi_config.sta.password));
     }
 
+    // iPhone hotspot'u WPA2/WPA3 karışık modda yayın yapıyor ve korumalı
+    // yönetim çerçevesi (PMF) bekliyor. Bu bayrak ayarlanmazsa 4'lü el sıkışma
+    // yarıda kalıyor ve bağlantı reason=204 (HANDSHAKE_TIMEOUT) ile düşüyor -
+    // şifre doğru olsa bile. capable=true, required=false: PMF isteyen AP'lerle
+    // çalışır, istemeyen eski AP'lerle de uyumlu kalır.
+    wifi_config.sta.pmf_cfg.capable = true;
+    wifi_config.sta.pmf_cfg.required = false;
+
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
     ESP_LOGI(TAG, "Ağ %d deneniyor, SSID: %s", idx + 1, (char *) wifi_config.sta.ssid);
 }

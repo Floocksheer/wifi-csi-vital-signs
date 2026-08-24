@@ -70,6 +70,17 @@ menu "ESP32 CSI Tool Config"
             Sending data through serial (to a computer) can take time and buffer space.
             If you are storing to an SD card, it may be useful to deselect this option.
 
+    config SEND_CSI_TO_UDP
+        depends on SHOULD_COLLECT_CSI
+        bool "Send CSI data over UDP to a server"
+        default "n"
+        help
+            CSI verisini seri port yerine ağ üzerinden bir sunucuya gönderir.
+            Kart USB kablosuna bağlı kalmak zorunda olmaz, sadece güce ihtiyaç
+            duyar - böylece odanın istediğin yerine konabilir.
+            Sunucunun IP'si elle ayarlanmaz: sunucu ağa yayın paketi atar,
+            kart o paketin geldiği adresi öğrenir.
+
     config SEND_CSI_TO_SD
         depends on SHOULD_COLLECT_CSI
         bool "Send CSI data to SD"

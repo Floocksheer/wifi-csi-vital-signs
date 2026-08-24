@@ -8,6 +8,23 @@ import numpy as np
 
 BRACKET_RE = re.compile(r"\[([\d\s-]+)\]")
 
+# ESP32 LLTF çıktısı 64 alt-taşıyıcı veriyor ama hepsi kullanılabilir değil
+# (2026-08-24'te ölçüldü):
+#   index 0     -> sabit 146 (CSI değil, başlık değeri; hiç değişmiyor)
+#   index 1-5   -> sabit/sıfır (kenar guard bandı)
+#   index 32    -> sıfır (DC alt-taşıyıcısı, hiç veri taşımaz)
+#   index 59-63 -> sıfır (diğer kenar guard bandı)
+# Bunlar özelliklere sıfır bilgi katıyor ama hareket enerjisi ortalamasını
+# sulandırıyordu: aynı veride tümü=1.46, sadece geçerliler=1.76.
+VALID_SUBCARRIERS = list(range(6, 32)) + list(range(33, 59))
+
+
+def valid_only(amp_matrix):
+    """Sadece bilgi taşıyan alt-taşıyıcıları döndürür (bkz. VALID_SUBCARRIERS)."""
+    if amp_matrix.ndim != 2 or amp_matrix.shape[1] <= max(VALID_SUBCARRIERS):
+        return amp_matrix  # beklenmedik format - dokunma
+    return amp_matrix[:, VALID_SUBCARRIERS]
+
 
 def parse_amplitude_matrix(text):
     """Ham CSV metni -> (paket, 128) genlik matrisi.
@@ -41,7 +58,12 @@ def parse_amplitude_matrix_from_file(csv_path):
 
 
 def extract_features(amp_matrix):
-    """(paket, 128) -> (512,) özet istatistik: mean/std/min/max her subcarrier için."""
+    """(paket, alt-taşıyıcı) -> özet istatistik: mean/std/min/max her subcarrier için.
+
+    Sadece geçerli alt-taşıyıcılar kullanılır (52 adet) - sabit/boş olanlar
+    modele bilgi katmıyor.
+    """
+    amp_matrix = valid_only(amp_matrix)
     return np.concatenate([
         amp_matrix.mean(axis=0),
         amp_matrix.std(axis=0),
@@ -61,7 +83,7 @@ def movement_energy(amp_matrix):
     """
     if len(amp_matrix) < 2:
         return 0.0
-    return float(np.abs(np.diff(amp_matrix, axis=0)).mean())
+    return float(np.abs(np.diff(valid_only(amp_matrix), axis=0)).mean())
 
 
 def sliding_windows(amp_matrix, win_sec, total_sec=8, overlap=0.5):
@@ -76,3 +98,35 @@ def sliding_windows(amp_matrix, win_sec, total_sec=8, overlap=0.5):
     step = max(1, int(pkt * (1 - overlap)))
     for s in range(0, n - pkt + 1, step):
         yield amp_matrix[s:s + pkt]
+
+# --- Hareket tespiti: bantgeçiren yöntem (2026-08-24 akşam) ---
+# NEDEN: Kartlar odanın iki ucuna taşınınca (RSSI -59 -> -71) her paketin CSI
+# kestirimi çok gürültülendi; hareketsizken bile ardışık-fark enerjisi 1.4'ten
+# 6.5'e çıktı ve yürüme bu gürültünün içinde kayboldu (oran 1.11x, eşik
+# doğruluğu %69).
+# ÇÖZÜM: Ölçüm gürültüsü BEYAZ (tüm frekanslara yayılı), yürümenin ürettiği
+# Doppler ise 0.3-3 Hz bandında. O bandı süzünce gürültünün çoğu atılıyor.
+# ÖLÇÜM (aynı veri, 4 sn pencere): oran 1.56x, eşik doğruluğu %93.
+MOVEMENT_BAND = (0.3, 3.0)
+MOVEMENT_WINDOW_SEC = 4.0   # 0.3 Hz'in periyodu 3.3 sn - 2 sn'lik pencereye sığmaz
+
+
+def movement_energy_bandpass(amp_matrix, fs, band=MOVEMENT_BAND):
+    """Hareket şiddeti: sadece 0.3-3 Hz bandındaki değişimin gücü.
+
+    fs: pencerenin gerçek örnekleme hızı (paket sayısı / süre). Paket hızı
+    dalgalandığı için sabit varsayılamaz, çağıran taraf ölçüp vermeli.
+    Filtre uygulanamazsa (çok kısa pencere / çok düşük hız) ardışık-fark
+    yöntemine düşer.
+    """
+    x = valid_only(amp_matrix)
+    lo, hi = band
+    nyq = fs / 2.0
+    if len(x) < 30 or hi >= nyq:
+        return movement_energy(amp_matrix)
+    try:
+        from scipy.signal import butter, filtfilt
+        b, a = butter(3, [lo / nyq, hi / nyq], btype="band")
+        return float(np.abs(filtfilt(b, a, x, axis=0)).mean())
+    except Exception:
+        return movement_energy(amp_matrix)

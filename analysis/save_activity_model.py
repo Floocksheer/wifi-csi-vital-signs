@@ -27,6 +27,7 @@ DATA_DIR = "../data"
 POSTURE_CLASSES = {"sit": 0, "stand": 1}
 POSTURE_NAMES = ["sit", "stand"]
 WINDOW_SEC = 2
+RECORDING_SEC = 18  # own_activity_sit/stand_*.csv, capture_csi.py --duration 18 ile alındı
 MODEL_PATH = "models/activity_classifier.joblib"
 
 
@@ -35,7 +36,7 @@ def main():
     for label_name, label_id in POSTURE_CLASSES.items():
         for p in sorted(glob.glob(f"{DATA_DIR}/own_activity_{label_name}_*.csv")):
             amp = parse_amplitude_matrix_from_file(p)
-            for window in sliding_windows(amp, WINDOW_SEC):
+            for window in sliding_windows(amp, WINDOW_SEC, total_sec=RECORDING_SEC):
                 X.append(extract_features(window))
                 y.append(label_id)
 

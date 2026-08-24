@@ -1,13 +1,157 @@
 # Proje Durumu, Kararlar ve Denenenler
 ### Yeni bir sohbet/oturum bu dosyayı okuyarak projeyi devralabilir
 
-**Son güncelleme:** 19 Ağustos 2026
+**Son güncelleme:** 24 Ağustos 2026
 **Depo:** `~/Documents/GitHub/wifi-csi-vital-signs` (GitHub: `Floocksheer/wifi-csi-vital-signs`, private)
 **Diğer dokümanlar:** `PROJE_SUNUM.md` (sunum için), `RuView_CSI_Proje_Plani.md` (detaylı faz planı)
 
 ---
 
 ## 0. HIZLI BAŞLANGIÇ (yeni oturumda ilk okunacak)
+
+### 🚀🚀 2026-08-24 (AKŞAM): UDP mimarisine geçildi — EN GÜNCEL, öncekiler geçersiz
+
+**Yönetici önerisi üzerine mimari değişti.** Artık kartlar USB kablosuna bağlı değil.
+
+```
+   [ESP32 #1]  ......  [TELEFON hotspot]  ......  [ESP32 #2]
+   odanın ucu           odanın ORTASI              odanın ucu
+   5V adaptör           (asıl VERİCİ)              5V adaptör
+        \                     |                      /
+         \_____ CSI verisi (UDP) ____________________/
+                          |
+                    [LAPTOP] aynı hotspot'ta, csi_udp_server.py
+```
+
+**Neden değişti:** Kartlar USB'ye bağlı olduğu için odanın uçlarına
+konamıyordu; algılama hacmi bir masa üstü kadar kalıyor ve yürüme/duruş
+ayrımı fiziksel olarak mümkün olmuyordu (bkz. Bölüm 5.1, Sonuç 3-4).
+
+**ÖLÇÜLEN SONUÇ (ilk test): 130-190 Hz, İKİ karttan aynı anda.**
+Önceki en iyi: tek kart, 100 Hz. Yani hem hız arttı hem de iki bağımsız
+ölçüm akışı (uzamsal çeşitlilik) kazanıldı.
+
+| | Eski (AP+STA, USB) | Yeni (UDP, kablosuz) |
+|---|---|---|
+| Kart sayısı (veri veren) | 1 | **2** |
+| Hız | 70-100 Hz | **130-190 Hz** |
+| Kartların yeri | USB kablosu kadar | **odanın herhangi bir yeri** |
+| Laptop bağlantısı | USB seri | WiFi (aynı hotspot) |
+
+**Firmware değişiklikleri (hepsi commit edilmeli):**
+- `_components/csi_udp_component.h` — YENİ. CSI'yi UDP ile gönderir.
+  Kuyruk + ayrı görev (CSI geri çağırımı WiFi görevinde çalışıyor, orada
+  ağ işlemi yapmak sistemi bloklar). Kuyruk dolarsa satır düşürülür, sayılır.
+- `_components/csi_component.h` — UDP kuyruğuna yazar; seri çıkış artık
+  `CONFIG_SEND_CSI_TO_SERIAL` ile opsiyonel. Ayrıca her kart kendi MAC'inden
+  kimlik üretiyor: `role` sütunu "STA-9d9c" / "STA-85b0" oluyor.
+  **CSV formatı değişmedi** - eski analiz kodları çalışmaya devam ediyor.
+- `active_sta/main/main.cc` — **PMF ayarı eklendi** (`pmf_cfg.capable = true`).
+  ⚠️ BU OLMADAN iPhone hotspot'una BAĞLANILAMIYOR: şifre doğru olsa bile
+  `reason=204` (HANDSHAKE_TIMEOUT) ile düşüyor. iOS hotspot'u WPA2/WPA3
+  karışık modda yayın yapıp korumalı yönetim çerçevesi bekliyor.
+- `active_sta/main/Kconfig.projbuild` — `SEND_CSI_TO_UDP` seçeneği.
+- `CONFIG_WIFI_CHANNEL=0` (tüm kanalları tara) - hotspot kanalı sabit değil.
+
+**Sunucu tarafı:** `analysis/csi_udp_server.py` — iki iş birden yapıyor:
+1. Kartlardan gelen CSI'yi toplar, `role` sütununa göre karta ayırır
+2. Kartlara paket gönderir (CSI ALINAN çerçevelerden üretilir; kimse
+   göndermezse hız ~10 Hz'e düşer). Saniyede 2 kez YAYIN paketi (kartlar
+   sunucunun adresini böyle öğreniyor - elle IP ayarı YOK), kart bulununca
+   ona doğrudan ~250 paket/sn.
+
+**Kurulum sırası (önemli):** Sunucu çalışmıyorsa kartlar veri göndermez
+(sunucuyu keşfedememiş olurlar). Önce `csi_udp_server.py`, sonra ölçüm.
+
+**Tuzak:** Flash yarıda kalırsa kart açılış döngüsüne girer
+("No bootable app partitions"). Yükleme çıktısında **3 adet "Hash of data
+verified" + "Leaving..."** görülmeli; görülmüyorsa tekrar yükle.
+
+---
+
+### ❌❌ EN KRİTİK BULGU (2026-08-24 akşam): OTUR/AYAKTA ÇALIŞMIYOR — kapandı
+
+**Kontrollü test yapıldı ve önceki tüm olumlu sonuçları çürüttü.**
+
+Bugün gün boyunca otur/ayakta için %70-74 doğruluk aldık ve bir noktada
+"24 faz, 17 doğru, binom p=0.032, istatistiksel olarak anlamlı" dedik.
+**Bu sonuç GEÇERSİZ.** Sebebi: o testlerin hepsinde kişi HEP AYNI NOKTADA
+oturup kalkıyordu. Model duruşu değil, o noktanın/zamanın imzasını
+ezberliyordu.
+
+**Çürüten test (calib_01, UDP mimarisi, 9 faz):** Kişi her turda FARKLI bir
+noktada oturup kalktı (tur içinde aynı nokta, turlar arası farklı). Modelin
+konuma tutunma imkanı kapatıldı:
+
+| | Doğruluk |
+|---|---|
+| STA-85b0 tek başına | %45.6 |
+| STA-9d9c tek başına | %43.3 |
+| İkisi birlikte (416 özellik) | %40.0 |
+| *şans seviyesi* | *%50* |
+
+Üçü de şans seviyesinin ALTINDA. Konum serbest bırakılınca sinyal tamamen
+kayboluyor.
+
+**SONUÇ: Bu donanımla (1 anten, 2.4 GHz, klasik ESP32) statik duruş
+sınıflandırması yapılamıyor.** Denenen ve başarısız olan her şey:
+mutlak desen, postural sway (dinamik), yüksek örnekleme hızı (9.5 -> 190 Hz),
+kesintisiz oturum, 4 farklı geometri, iki kartın birleşimi. **Tekrar
+denemeye değmez** - yeni bir fikir varsa önce konum-değişken protokolle
+test edilmeli, sabit konumda alınan hiçbir sonuca güvenilmemeli.
+
+**METODOLOJİK DERS (bu projenin en pahalı dersi):** Sabit konumda ölçüm,
+duruş sınıflandırmasında yanıltıcı yüksek doğruluk üretir. Doğrulama
+protokolü, modelin tutunabileceği her yardımcı değişkeni (konum, zaman,
+oturum) bilerek değiştirmeli. Yoksa "istatistiksel olarak anlamlı" bir
+sonuç bile tamamen yanlış olabilir.
+
+### ✅ ÇALIŞAN: hareket/yürüme tespiti (UDP mimarisi, 2026-08-24 akşam)
+
+| Ölçüm | Değer |
+|---|---|
+| Yürüme / hareketsiz enerji oranı | **1.72x** |
+| Eşikle ayırma doğruluğu | **%85** |
+| Yöntem | bantgeçiren 0.3-3 Hz, 4 sn pencere, İKİ KARTIN MİNİMUMU |
+
+**"İki kartın minimumu" neden en iyisi:** gürültü sıçramaları iki kartta
+bağımsız; minimum alınca birinde çıkan sahte yükselme eleniyor, gerçek
+hareket ikisini birden yükselttiği için hayatta kalıyor. Ölçüm: tek kart
+%76 ve %83, minimum %87 (motion_check); calib_01'de %85.
+
+Bu yöntem üç ayrı geometride tutarlı çalıştı - konumdan bağımsız,
+güvenilir. **Projenin sağlam teslim edilebilir çıktısı budur.**
+
+---
+
+### 2026-08-24 (öğlen): 2. ESP32 AP olarak kuruldu — ARTIK KULLANILMIYOR
+(Yukarıdaki UDP mimarisi bunun yerini aldı. Yedek yapılandırma:
+`active_sta/sdkconfig.defaults.local.apbak`. Aşağıdaki bilgiler tarihsel.)
+
+### 🚀 2026-08-24: 2. ESP32 kuruldu — mimari değişti (en güncel durum)
+Artık **iki kart** var, laptop bağlantısı olmadan çalışan bir AP+STA çifti:
+- **Board A** (orijinal kart, MAC `d4:e9:f4:a4:9d:9c`) — `active_sta` firmware'i,
+  laptopa USB ile bağlı, **CSI toplayan ve seri porttan veri gönderen kart**.
+  Port: `/dev/cu.usbserial-3` (port ismi değişebilir, aşağıya bak).
+- **Board B** (2. kart, MAC `d4:e9:f4:a4:85:b0`) — `active_ap` firmware'i,
+  kendi WiFi ağını yayınlıyor (SSID `ESP32_CSI_AP`, şifre `csitool123`, kanal 6).
+  CSI TOPLAMIYOR (`SHOULD_COLLECT_CSI=n` — Board A'nın hızını maksimize etmek için).
+  Sadece güç istiyor, laptopa veri bağlantısı GEREKMİYOR (şu an ikisi de aynı
+  laptopta çünkü kullanıcının başka güç kaynağı yok — bu sorun değil, iki port
+  yeter).
+- **Ölçülen sonuç: flood'suz, sadece firmware'in kendi dahili STA→AP
+  trafiğiyle 82-101 Hz.** Laptop flood'u bu mimaride YARDIMCI DEĞİL, ZARARLI
+  (82-101 Hz → flood ile 67 Hz'e düşüyor — seri port + radyo zamanı için
+  firmware'in kendi trafiğiyle yarışıyor). `capture_csi.py` artık varsayılan
+  olarak flood YAPMIYOR (`--flood` ile açılabilir, sadece tek kart + ev
+  wifi/hotspot senaryosu için hâlâ işe yarar).
+- **Port isimleri karışabilir:** iki CP2102 kartın ikisi de fabrika seri
+  numarası "0001" paylaşıyor, macOS `/dev/cu.usbserial-0001` ve
+  `/dev/cu.usbserial-3` gibi farklı isimler veriyor ama SIRA GARANTİLİ DEĞİL.
+  Emin olmak için: `esptool.py --port /dev/cu.usbserial-X chip_id` çalıştır,
+  MAC `...9d:9c` ise Board A (STA/veri), `...85:b0` ise Board B (AP).
+- Sıradaki adım: bu yeni hızla otur/ayakta + yürüme verisi baştan toplamak
+  (bkz. Bölüm 5).
 
 ### Ortamı açma
 ```bash
@@ -19,28 +163,39 @@ export CMAKE_POLICY_VERSION_MINIMUM=3.5     # modern CMake + eski ESP-IDF uyumu 
 cd ~/Documents/GitHub/wifi-csi-vital-signs/analysis && source venv/bin/activate
 ```
 
-### Sık kullanılan komutlar
+### Sık kullanılan komutlar (UDP mimarisi - GÜNCEL)
 ```bash
-# Firmware yükleme (WiFi bilgisi değişince gerekir)
+# 1) Kartların bağlı olduğunu ve hızı doğrula (kartlar adaptörde, USB gerekmez)
+cd analysis && python3 csi_udp_server.py --duration 15
+#    Beklenen: iki kart da görünmeli, 130-190 Hz
+
+# 2) Veri kaydet
+python3 csi_udp_server.py --duration 20 --output ../data/xxx
+#    -> ../data/xxx_STA-9d9c.csv ve ../data/xxx_STA-85b0.csv
+
+# 3) Firmware yükleme (SADECE ayar değişince - kartı USB'ye takman gerekir)
 cd firmware/ESP32-CSI-Tool/active_sta
 rm -f sdkconfig sdkconfig.old && idf.py build
-idf.py -p /dev/cu.usbserial-0001 -b 115200 flash      # -b 115200 ŞART, 460800 hata veriyor
-
-# Veri toplama (flood otomatik açık, ~145 Hz)
-cd analysis && python3 capture_csi.py --duration 8 --output ../data/xxx.csv
-
-# Canlı gösterge
-python3 live_server.py        # http://localhost:5050
+idf.py -p /dev/cu.usbserial-X -b 115200 flash    # -b 115200 ŞART
+#    Çıktıda 3x "Hash of data verified" + "Leaving..." GÖRÜLMELİ
 ```
+⚠️ Kartlar hotspot'a bağlanmıyorsa: telefonda *Kişisel Erişim Noktası →
+Maksimum Uyumluluk* açık mı? Laptop da AYNI hotspot'ta mı?
+
+**ESKİ (seri port) komutları** - sadece USB mimarisine dönülürse geçerli:
+`capture_csi.py`, `guided_capture.py`, `calibrate_live.py`, `live_server.py`
+hâlâ seri porttan okuyor; UDP mimarisine uyarlanmaları gerekiyor.
 
 ### Donanım gerçekleri
-| | |
-|---|---|
-| Kart | **ESP32-D0WD-V3** (klasik ESP32, DevKitV1). S3/C6 DEĞİL — esptool ile silikondan doğrulandı |
-| Anten | **1 adet** (poz tahmini için 3 gerekiyor → yapılamıyor) |
-| Bant | **Sadece 2.4 GHz** (5 GHz ağlara bağlanamaz) |
-| Seri port | `/dev/cu.usbserial-0001`, baud **921600** |
-| MAC | `d4:e9:f4:a4:9d:9c` |
+| | Board A (STA, veri) | Board B (AP, sadece yayın) |
+|---|---|---|
+| Rol | CSI toplar, laptopa USB ile bağlı | Kendi ağını yayınlar, CSI toplamaz |
+| Kart | ESP32-D0WD-V3 (klasik ESP32, DevKitV1) | ESP32-D0WD-V3 (aynı model) |
+| MAC | `d4:e9:f4:a4:9d:9c` | `d4:e9:f4:a4:85:b0` (AP arayüzü: `...85:b1`) |
+| Seri port | `/dev/cu.usbserial-3` (değişebilir) | `/dev/cu.usbserial-0001` (değişebilir) |
+| Ağ | `ESP32_CSI_AP` şifre `csitool123` kanal 6'ya bağlanır, IP `192.168.4.2` | AP olarak `192.168.4.1`'i yayınlar |
+
+Ortak: **1 anten** (poz tahmini için 3 gerekiyor → yapılamıyor), **sadece 2.4 GHz**, baud **921600**.
 
 ---
 
@@ -197,31 +352,130 @@ Canlı testte model sürekli "AYAKTA" dedi (%94 güvenle). Teşhis:
 | Kalp atışı | Bandpass filtre (frekans) | ✅ Bozulmaz | Aynı |
 | Hareket var/yok | Enerji (ardışık fark) | ✅ Bozulmaz | Kendi geçmişiyle kıyaslıyor |
 | **Oturma/ayakta** | **ML (mutlak desen)** | ❌ **Bozulur** | Donmuş sinyalin şeklini ezberliyor, o şekil odaya özgü |
+| ~~Oturma/ayakta~~ | ~~ML (dinamik/postural sway)~~ | — | ❌ 2026-08-24: hiç çalışmıyor (%39.6, p=0.92). Bkz. Bölüm 5.1 |
 
 **Genel kural:** *Değişimi* ölçen yöntemler ortamdan bağımsız, *mutlak deseni* ezberleyen yöntemler ortama bağımlı.
 
+⚠️ **2026-08-24 istisnası:** Bu kural "dinamik olan her şey çalışır" anlamına GELMİYOR.
+Dinamik özellikler ancak ölçtükleri fark gerçekten varsa işe yarar. Hareket enerjisi
+çalışıyor çünkü hareket gerçek ve büyük; postural sway çalışmadı çünkü bu donanımda
+(1 anten, 2.4 GHz) o kadar ince bir salınım ölçülemiyor.
+
 ---
 
-## 5. SIRADAKİ PLAN (2026-08-19 itibarıyla)
+## 5. SIRADAKİ PLAN (2026-08-19 itibarıyla, 2026-08-24'te mimari notu eklendi)
 
-### Hemen yapılacak: Fizibilite testi
-145 Hz'de 2 soru ölçülecek:
-1. Yüksek hız, eski (mutlak desen) yöntemin oturum-arası başarısını düzeltiyor mu?
-2. **Yeni fikir:** Oturma/ayakta ayrımı **dinamik** özelliklerle yapılabilir mi?
+**Güncelleme (2026-08-24):** 2. ESP32 AP mimarisi kuruldu ve doğrulandı (Bölüm 0),
+82-101 Hz native hız alınıyor. Aşağıdaki "145 Hz" referansları hotspot-flood
+döneminden kalma ama sonuç aynı ölçekte (80-150 Hz bandı). **Fizibilite testi
+YAPILDI — sonuçlar Bölüm 5.1'de.** Özet: postural sway çürüdü, mutlak desen sadece
+kesintisiz oturum içinde çalışıyor (%70.5, p=0.032), hareket tespiti sağlam (2.44x).
 
-### 💡 Yeni fikir: Postural sway (dinamik ayrım) — TEST EDİLECEK
-**Hipotez:** Ayakta duran insan asla tam hareketsiz değildir — dengede kalmak için sürekli minik düzeltmeler yapar (postural sway). Oturan insan çok daha kararlıdır. Ayrıca nefes sırasında göğüs hareketi iki pozisyonda farklı görünür.
+### ✅ Fizibilite testi YAPILDI (2026-08-24) — sonuçlar aşağıda (Bölüm 5.1)
 
-**Neden umut verici:** Bu bir *dinamik* fark (zaman içindeki değişim) → Bölüm 4'teki kurala göre **ortamdan bağımsız** olmalı → kalibrasyon derdini ortadan kaldırabilir.
+### ❌ Postural sway (dinamik ayrım) — TEST EDİLDİ, ÇÜRÜDÜ
+**Hipotez neydi:** Ayakta duran insan dengede kalmak için sürekli minik düzeltmeler
+yapar (postural sway); oturan insan daha kararlıdır. Bu *dinamik* bir fark olduğu
+için Bölüm 4'teki kurala göre ortamdan bağımsız olmalıydı.
 
-**Neden daha önce denenemedi:** 9.5 Hz'de bu ince salınımları görecek çözünürlük yoktu. 145 Hz'de var.
+**Sonuç: hipotez YANLIŞ.** Dinamik özellikler (ardışık paket farklarının
+mean/std/abs-mean'i) her testte şans seviyesinin ALTINDA kaldı:
+| Test | Postural sway | Mutlak desen |
+|---|---|---|
+| Ayrı kayıtlar (resetli), 10 grup | %45.9 | %52.9 |
+| guided_01 (kesintisiz), 12 faz | %64.6 | %66.7 |
+| guided_02 (kesintisiz), 12 faz | %44.4 | %80.6 |
+| **guided_01+02 birleşik, 24 faz** | **%39.6** (9/24, p=0.92) | **%70.5** (17/24, p=0.032) |
 
-### Kalibrasyon stratejileri (dinamik yöntem tutmazsa)
-- **A) Hızlı kalibrasyon rutini:** 145 Hz'de 20 sn = ~2900 paket = yüzlerce pencere. "20 sn otur → 20 sn ayakta dur → otomatik eğit" = **toplam ~1 dakika**. Kalibrasyonu sinir bozucu olmaktan çıkarır.
-- **B) Konum kütüphanesi:** Her ortam için bir kez kalibre et (`model_ofis.joblib`, `model_ev.joblib`), o ortama dönünce yükle.
+Bu fikri tekrar denemeye gerek yok - 24 bağımsız faz grubuyla test edildi,
+binom testi p=0.92 (yani tamamen rastgele). **Kapandı.**
 
-### Toplanacak veri (yüksek hızda, sıfırdan)
-Kullanıcı onayladı: oturma, ayakta, **yürüme**, ayakta→oturma geçişi, oturma→ayakta geçişi — her birinden bolca.
+### Kalibrasyon stratejileri (dinamik yöntem tutmadı → bunlar tek yol)
+- **A) Hızlı kalibrasyon rutini:** ~90 Hz'de 20 sn = ~1800 paket = yüzlerce pencere.
+  "20 sn otur → 20 sn ayakta dur → otomatik eğit" = **toplam ~1 dakika**.
+  ⚠️ 2026-08-24 bulgusuna göre kalibrasyon ile kullanım **aynı kesintisiz bağlantıda**
+  olmalı (arada reset/yeniden bağlanma olmamalı) - bkz. Bölüm 5.1.
+- **B) Konum kütüphanesi:** Her ortam için bir kez kalibre et (`model_ofis.joblib`,
+  `model_ev.joblib`), o ortama dönünce yükle. ⚠️ Aynı reset kısıtı burada da geçerli,
+  bu yüzden B seçeneği pratikte çalışmayabilir.
+
+---
+
+## 5.1 FİZİBİLİTE TESTİ SONUÇLARI (2026-08-24, 2 ESP32 AP mimarisi)
+
+### Ne yapıldı
+1. Ayrı ayrı 19 kayıt (5 otur, 5 ayakta, 3 ani-otur, 3 ani-kalk, 3 yürüme), her biri
+   `--reset` ile → `data/own_activity_*.csv`
+2. Tek kesintisiz 90 sn kayıt, kullanıcının kendi kronometresiyle → **başarısız**,
+   etiketler veriyle hizalanmadı (hareket zirveleri faz sınırlarına düşmedi)
+3. `guided_capture.py` yazıldı: macOS `say` ile sesli komut + komut anındaki ESP zaman
+   damgası kaydediliyor → senkron hatası fiziksel olarak imkansız
+4. guided_01 (12 faz × 12 sn), motion_check_01 (hareket duyarlılığı), guided_02
+   (12 faz × 10 sn, belirgin geçişlerle) → `data/continuous_session/`
+
+### Sonuç 1: Hareket tespiti ÇALIŞIYOR (sağlam)
+`motion_check_01` (kıpırdama vs kollarını salla, 6 faz):
+```
+KIPIRDAMA      : 1.36        KOLLARINI SALLA: 3.32        ORAN: 2.44x
+faz faz: 1.26 / 1.98 / 1.24 / 3.80 / 1.58 / 4.19  (temiz ayrışıyor)
+```
+Zirveler tam komut anında başlıyor → hem hareket tespiti hem de sesli yönlendirme
+mekanizması doğrulandı.
+
+### Sonuç 2: Otur/ayakta — zayıf ama GERÇEK sinyal, sadece kesintisiz oturumda
+| Koşul | Doğruluk | Anlamlılık |
+|---|---|---|
+| Ayrı kayıtlar (her biri resetli), 10 grup | %52.9 | şans seviyesi |
+| Kesintisiz oturum, 24 faz grubu | **%70.5** | 17/24, **binom p=0.032** |
+
+**Yorum:** Reset/yeniden bağlanma, kayıtlar arası karşılaştırmayı yok ediyor. Aynı
+kesintisiz bağlantı içinde ise gerçek (ama mütevazı) bir sinyal var. Fold başına
+sapma hâlâ yüksek (±%32.5), yani tek bir 2 sn'lik pencereye güvenilmez - çoklu
+pencere oylaması gerekir.
+
+### Sonuç 3: Geometri sorunu (açık konu)
+Kartlar masa seviyesinde ve kişi tam aralarında dururken, **gövde her iki duruşta da
+doğrudan hattı aynı şekilde kesiyor** → otur/ayakta farkı fizik olarak zayıf kalıyor.
+Kanıt: kol sallamak net görünüyor (2.44x) ama otur/ayakta geçişlerinin çoğu hiç
+görünmüyor (guided_02'de 12 fazın sadece 2'sinde geçiş zirvesi var; buna karşılık
+bazı geçişler 8.05 gibi devasa değerler üretiyor - yani tutarsız).
+
+**Önerilen çözüm (henüz denenmedi, kullanıcıda uygun yer yoktu):** kartları ayaktayken
+göğüs hizasına (~140-150 cm) kaldırmak. O yükseklikte ayaktayken hat kesilir,
+otururken baş o seviyenin altında kalır → fizik olarak zorunlu büyük fark.
+
+### Sonuç 4: Kişinin konumu — ölçüldü (2026-08-24 akşam)
+İki pozisyon aynı protokolle (otur/ayakta/yürü, sesli kalibrasyon) karşılaştırıldı:
+
+| Kişinin yeri | hareketsiz enerji | yürüme enerjisi | otur/ayakta |
+|---|---|---|---|
+| Kartların **tam arasında** (sağ/sol) | 2.83 | 2.43 ⟵ **TERS** | %70.0 |
+| Kartların **ön çaprazında**, geride | 1.80 | 1.86 ⟵ doğru yön | **%73.8** |
+
+**Bulgu:** Tam arada dururken vücut doğrudan hattı derinden kesiyor; kişi uzaklaşınca
+yol temizlenip sinyal SAKİNLEŞİYOR → "hareket = daha çok dalgalanma" varsayımı
+tersine dönüyor ve hareket kapısı çalışmıyor. Ön çaprazda durunca kişi hattı kesmek
+yerine bozuyor (saçıcı gibi davranıyor) → yön düzeliyor. **Ön çapraz pozisyon tercih
+edilmeli.** Ama fark hâlâ çok küçük (%3), yürüme tespiti için yetersiz.
+
+**Asıl darboğaz: algılama hacmi.** İki kart masada ~1 m arayla duruyor, kişi yürürken
+zamanının çoğunu bu küçük bölgenin dışında geçiriyor. Board B (AP) sadece GÜCE
+ihtiyaç duyuyor (veri bağlantısı gerekmiyor) - herhangi bir USB telefon şarj
+adaptörü/powerbank ile odanın öbür ucuna konabilir. **Bu, denenmemiş en yüksek
+getirili değişiklik.**
+
+### Alt-taşıyıcı maskeleme (2026-08-24, kod düzeltmesi)
+64 alt-taşıyıcının 12'si bilgi taşımıyor: index 0 sabit 146 (başlık değeri),
+1-5 ve 59-63 kenar guard bandı, 32 DC. Bunlar hareket enerjisi ortalamasını
+sulandırıyordu (aynı veri: tümü=1.46, sadece geçerliler=1.76). `activity_features.py`
+içinde `VALID_SUBCARRIERS` ile maskelendi. ⚠️ Bu, özellik vektörünün boyutunu
+değiştirir - bu değişiklikten ÖNCE eğitilmiş modeller uyumsuzdur, yeniden
+kalibre edilmeli.
+
+### Veri kalitesi notu (kontrol edildi, sorun yok)
+guided_02'de paket aralığı medyan 10.0 ms (~100 Hz), 0.2 sn üstü tek bir boşluk
+(220 ms), saniye başına 55-118 paket. Seri hat ~%72 doluluk. **Veri kaybı yok** -
+yukarıdaki başarısızlıklar ölçüm kaynaklı değil, fiziksel.
 
 ---
 
@@ -275,7 +529,8 @@ firmware/ESP32-CSI-Tool/
   active_sta/main/main.cc        # ⭐ ÖZELLEŞTİRİLDİ: çift ağ + dinamik gateway IP
   active_sta/main/Kconfig.projbuild  # ÖZELLEŞTİRİLDİ: ikinci ağ tanımları
   active_sta/sdkconfig.defaults   # Ayarlar (placeholder WiFi - git'e girer)
-  active_sta/sdkconfig.defaults.local  # ⚠️ GERÇEK WiFi şifreleri - .gitignore'da
+  active_sta/sdkconfig.defaults.local  # ⚠️ GERÇEK WiFi şifreleri - .gitignore'da (Board A, primary=ESP32_CSI_AP)
+  active_ap/sdkconfig.defaults    # ⭐ YENİ (2026-08-24): Board B'nin AP ayarları (SSID/şifre commit edilir, gerçek wifi değil)
   _components/sockets_component.h # ÖZELLEŞTİRİLDİ: sabit IP yerine target_ip
 
 docs/

@@ -15,7 +15,13 @@ import time
 # olmalı. Farklı ağlardaysa flood paketleri karta hiç ulaşmaz (sessizce başarısız
 # olur, sadece hız düşük kalır). Kart bağlanınca seri porta "Got ip:X.X.X.X" yazar
 # - detect_esp_ip() bunu okuyabilir.
-DEFAULT_ESP_IP = "172.20.10.12"  # hotspot; ev wifi'sinde 192.168.1.7 idi
+# 2. ESP32 (özel AP, "ESP32_CSI_AP") mimarisinde Board A'nın DHCP IP'si sabit:
+# 192.168.4.2 (ESP-IDF SoftAP varsayılanı, AP'nin kendisi 192.168.4.1).
+# NOT: bu mimaride flood artik GEREKMIYOR, olcduk hizi dusuruyor (82-101Hz ->
+# 67Hz) - firmware'in kendi STA->AP trafigi zaten yeterli. Sadece tek kartla
+# ev wifi'sine/hotspot'a baglaniyorsan (dedicated AP yoksa) flood hala isine
+# yarar; o durumda hotspot IP'sini (orn. 172.20.10.12) kullan.
+DEFAULT_ESP_IP = "192.168.4.2"
 DEFAULT_PORT = 2223
 DEFAULT_INTERVAL = 0.004  # ~250 paket/sn hedef
 
