@@ -111,6 +111,72 @@ MOVEMENT_BAND = (0.3, 3.0)
 MOVEMENT_WINDOW_SEC = 4.0   # 0.3 Hz'in periyodu 3.3 sn - 2 sn'lik pencereye sığmaz
 
 
+# --- Yürüme sınıflandırması için özellikler (2026-08-25) ---
+# TASARIM KURALI: SADECE ÖLÇEKTEN BAĞIMSIZ ÖZELLİK.
+# Bu projedeki tüm büyük başarısızlıkların kaynağı mutlak genlik kullanmaktı:
+# oturumdan oturuma donanım sürüklenmesi (otomatik kazanç, sıcaklık, verici
+# gücü) sınıf farkından 5 kat büyük kayma üretiyor (bkz. Bölüm 3.7).
+# Buradaki özelliklerin hepsi ORAN ya da ŞEKİL - genel seviye 2 katına çıksa
+# bile değişmezler.
+#
+# Fizik: ölçüm gürültüsü BEYAZ (tüm frekanslara yayılı), hareketin ürettiği
+# Doppler ise 0.3-3 Hz'de toplanıyor. Spektrumun ŞEKLİ bu yüzden hareketi
+# ele veriyor ve şekil, mutlak güçten bağımsız.
+FEATURE_BANDS = [(0.2, 0.6), (0.6, 1.5), (1.5, 3.0),
+                 (3.0, 6.0), (6.0, 12.0), (12.0, 25.0)]
+WALKING_FEATURE_NAMES = (
+    [f"bant_{lo}_{hi}" for lo, hi in FEATURE_BANDS]
+    + ["log_sinyal_gurultu", "spektral_merkez", "degisim_katsayisi",
+       "lag1_otokorelasyon", "aktif_altttasiyici_orani"])
+
+
+def walking_features(amp_matrix, fs):
+    """(paket, alt-taşıyıcı) + örnekleme hızı -> ölçekten bağımsız özellik vektörü.
+
+    EĞİTİM ve CANLI SİSTEM AYNI FONKSİYONU KULLANMALI - ayrışırlarsa model
+    canlıda sessizce yanlış çalışır. Bu yüzden burada, ortak dosyada duruyor.
+    """
+    x = valid_only(amp_matrix).astype(float)
+    n = x.shape[0]
+    if n < 16 or fs <= 0:
+        return np.zeros(len(WALKING_FEATURE_NAMES))
+
+    per_pkt = x.mean(axis=1)
+    x = x - x.mean(axis=0)                      # her alt-taşıyıcıyı ortala
+
+    freqs = np.fft.rfftfreq(n, 1.0 / fs)
+    power = (np.abs(np.fft.rfft(x, axis=0)) ** 2).mean(axis=1)
+
+    band_e = []
+    for lo, hi in FEATURE_BANDS:
+        sel = (freqs >= lo) & (freqs < hi)
+        band_e.append(float(power[sel].sum()) if sel.any() else 0.0)
+    band_e = np.array(band_e)
+    total = band_e.sum() + 1e-12
+    band_frac = band_e / total                  # spektrumun ŞEKLİ (toplamı 1)
+
+    # sinyal/gürültü: hareket bandı (0.3-3) / beyaz gürültü bandı (8-25)
+    lo_sel = (freqs >= 0.3) & (freqs < 3.0)
+    hi_sel = (freqs >= 8.0) & (freqs < 25.0)
+    lo_e = float(power[lo_sel].sum()) if lo_sel.any() else 0.0
+    hi_e = float(power[hi_sel].sum()) if hi_sel.any() else 0.0
+    snr = np.log10((lo_e + 1e-12) / (hi_e + 1e-12))
+
+    centroid = float((freqs * power).sum() / (power.sum() + 1e-12))
+
+    mean_lv = float(per_pkt.mean())
+    cv = float(per_pkt.std() / (abs(mean_lv) + 1e-12))   # ölçekten bağımsız
+
+    d = per_pkt - per_pkt.mean()
+    denom = float((d * d).sum()) + 1e-12
+    lag1 = float((d[:-1] * d[1:]).sum() / denom)
+
+    var = x.var(axis=0)
+    active = float((var > np.median(var)).mean()) if len(var) else 0.0
+
+    return np.concatenate([band_frac, [snr, centroid, cv, lag1, active]])
+
+
 def movement_energy_bandpass(amp_matrix, fs, band=MOVEMENT_BAND):
     """Hareket şiddeti: sadece 0.3-3 Hz bandındaki değişimin gücü.
 

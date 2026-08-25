@@ -16,10 +16,11 @@ Kullanım:
 import argparse
 import json
 import pathlib
+import random
 import time
 
 from csi_udp_server import CsiUdpServer
-from guided_capture import speak
+from voice import speak
 
 POSTURES = ["otur", "ayakta"]
 
@@ -33,6 +34,30 @@ def main():
     ap.add_argument("--output", required=True, help="Uzantısız çıktı yolu")
     ap.add_argument("--settle-sec", type=float, default=6,
                     help="Kayda başlamadan önce kartların bulunması için beklenecek süre")
+    # --- kayıt koşulları (2026-08-25) ---
+    # Konum etiketi OLMADAN doğru doğrulama yapılamıyor: doğrulama gruplarını
+    # fazlara göre ayırınca aynı konumun başka bir fazı eğitimde kalıyor, model
+    # duruş yerine konumu ezberleyip test fazında onu kullanabiliyor -> doğruluk
+    # şişiyor. Doğru doğrulama Leave-One-POSITION-Out, o da bu etikete muhtaç.
+    # Bkz. docs/OTUR_AYAKTA_VERI_TOPLAMA_PLANI.md Bölüm 8.1
+    ap.add_argument("--position", default=None,
+                    help="Kişinin durduğu nokta (ör. P1) - doğrulama bunu grup olarak kullanır")
+    ap.add_argument("--height", type=float, default=None,
+                    help="Kartların yerden yüksekliği (cm). Geometri değişirse "
+                         "veriler BİRLİKTE eğitilemez - bu yüzden kayda yazılıyor.")
+    ap.add_argument("--session", default=None,
+                    help="Oturum kimliği (ör. tur1) - oturumlar arası kaymayı ayırmak için")
+    # --- faz süresi rastgeleliği (2026-08-25) ---
+    # NEDEN: sabit faz süresinde kişi bir sonraki komutun NE ZAMAN geleceğini
+    # öğreniyor ve ona hazırlanıyor. h115 kaydında ölçüldü: "otur" komutunda
+    # zirve 0.15-0.25 sn sonra, "ayakta" komutunda 2.5-3.75 sn sonra. Bu FİZİK
+    # değil TEPKİ SÜRESİ farkı - eğitim verisinde mükemmel ayırır, gerçekte
+    # çöker. Süre rastgele olunca kişi anticipe edemiyor.
+    ap.add_argument("--jitter", type=float, default=0.0,
+                    help="Faz süresine +/- bu kadar saniye rastgelelik kat "
+                         "(tepki süresi ezberini kırar; geçiş verisinde ÖNERİLİR)")
+    ap.add_argument("--seed", type=int, default=None,
+                    help="Rastgelelik tohumu (tekrarlanabilirlik için)")
     args = ap.parse_args()
 
     if args.cues:
@@ -43,9 +68,29 @@ def main():
     unique = list(dict.fromkeys(cues))
     labels = [unique.index(c) for c in cues]
 
-    total = args.phases * args.phase_sec
-    print(f"Protokol: {args.phases} faz x {args.phase_sec:.0f} sn = {total:.0f} sn")
-    print(f"Komutlar: {' -> '.join(cues)}\n")
+    # Faz süreleri önceden belirleniyor: jitter varsa her faz farklı uzunlukta.
+    # Zamanlama kümülatif (sabit phase_sec varsayımı kalktı).
+    rng = random.Random(args.seed)
+    durs = [args.phase_sec + (rng.uniform(-args.jitter, args.jitter)
+                              if args.jitter else 0.0)
+            for _ in cues]
+    offsets, acc = [], 0.0
+    for d in durs:
+        offsets.append(acc)
+        acc += d
+    total = acc
+
+    print(f"Protokol: {args.phases} faz x {args.phase_sec:.0f} sn"
+          + (f" (±{args.jitter:.0f} sn rastgele)" if args.jitter else "")
+          + f" = {total:.0f} sn")
+    print(f"Komutlar: {' -> '.join(cues)}")
+    if args.position or args.height or args.session:
+        print(f"Koşullar: konum={args.position}  yükseklik={args.height}  "
+              f"oturum={args.session}")
+    else:
+        print("⚠️  --position verilmedi: bu kayıt Leave-One-Position-Out "
+              "doğrulamasında KULLANILAMAZ.")
+    print()
 
     # keep_sec: tüm kayıt + pay. Kısa tutulursa başlangıç silinir.
     srv = CsiUdpServer(keep_sec=total + args.settle_sec + 30).start()
@@ -72,7 +117,7 @@ def main():
     t0 = time.time()
     try:
         for i, cue in enumerate(cues):
-            while time.time() < t0 + i * args.phase_sec:
+            while time.time() < t0 + offsets[i]:
                 time.sleep(0.005)
             now = time.time()
             speak(cue)
@@ -97,6 +142,9 @@ def main():
         json.dump({"phase_sec": args.phase_sec, "cues": cues,
                    "postures": unique, "phases": phases,
                    "files": written,
+                   "position": args.position, "height_cm": args.height,
+                   "session": args.session,
+                   "jitter": args.jitter, "durations": durs,
                    "note": "recv_ts_* laptop saati; CSV'nin son sutunu recv_time ayni saat"},
                   f, indent=2)
 
