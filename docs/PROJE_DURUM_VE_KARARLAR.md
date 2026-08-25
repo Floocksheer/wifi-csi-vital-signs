@@ -1,7 +1,7 @@
 # Proje Durumu, Kararlar ve Denenenler
 ### Yeni bir sohbet/oturum bu dosyayı okuyarak projeyi devralabilir
 
-**Son güncelleme:** 24 Ağustos 2026
+**Son güncelleme:** 25 Ağustos 2026
 **Depo:** `~/Documents/GitHub/wifi-csi-vital-signs` (GitHub: `Floocksheer/wifi-csi-vital-signs`, private)
 **Diğer dokümanlar:** `PROJE_SUNUM.md` (sunum için), `RuView_CSI_Proje_Plani.md` (detaylı faz planı)
 
@@ -9,7 +9,239 @@
 
 ## 0. HIZLI BAŞLANGIÇ (yeni oturumda ilk okunacak)
 
-### 🚀🚀 2026-08-24 (AKŞAM): UDP mimarisine geçildi — EN GÜNCEL, öncekiler geçersiz
+### 🚀🚀🚀 2026-08-25: BYOD/MAC-spoof denemesi kapandı, dünkü 2-ESP UDP mimarisine GERİ DÖNÜLDÜ — EN GÜNCEL
+
+**Özet (30 saniyede):** Bugün yönetici ofis WiFi'sine (BYOD, MAC filtreli) MAC
+taklidiyle bağlanmayı denedik — donanımsal engel yüzünden (BYOD 5GHz, klasik
+ESP32 sadece 2.4GHz) imkansız olduğu kanıtlandı, kapandı. Tek-ESP+telefon
+hotspot alternatifi de denendi, teknik olarak çalışıyor ama dünkü kanıtlanmış
+2-ESP mimarisinin gerisinde kaldığı için **terk edildi**. Şu an sistem
+**dünkü haliyle** (Bölüm 0'ın altındaki 2026-08-24 UDP mimarisi) çalışıyor ve
+doğrulandı: iki kart da hotspot üzerinden UDP ile veri gönderiyor. **Kartlar
+henüz USB'de** — bir sonraki adım onları 5V adaptöre alıp odanın uçlarına
+yerleştirmek.
+
+#### A) BYOD / MAC-spoof denemesi (KAPANDI, kod duruyor ama pasif)
+
+**Neden denendik:** BT ekibi ofis WiFi şifresini vermeyeceğini söyledi.
+Yönetici "orada erişim MAC adresine göre veriliyor, kendi laptobumun MAC'ini
+ESP'ye çak, o da bağlansın" dedi.
+
+**Ne yapıldı:**
+- `firmware/ESP32-CSI-Tool/active_sta/main/main.cc` — `parse_mac()` ve
+  `apply_spoof_mac()` eklendi. `CONFIG_SPOOF_MAC` (Kconfig, yeni) boş
+  değilse `esp_wifi_set_mac()` ile ESP'nin STA MAC'ini değiştiriyor.
+  `station_init()` içinde `esp_wifi_set_mode()` sonrası, kimlik bilgilerinden
+  ÖNCE çağrılıyor.
+- `Kconfig.projbuild` — `SPOOF_MAC` string seçeneği (varsayılan boş = dokunma).
+- Bu iki değişiklik **push edilmeye karar verildi** (2026-08-25, kullanıcı
+  GitHub Desktop'ta inceledi) — eski/çöp değil, çalışan opsiyonel bir özellik,
+  varsayılan davranışı hiç etkilemiyor (boş string = no-op).
+
+**Test sonucu — donanımsal engel:**
+1. `sdkconfig.defaults.local`: `SSID="BYOD"`, şifre boş, `SPOOF_MAC="4e:bd:9f:62:b7:fc"`
+   (kullanıcının kendi laptop MAC'i) ile derlendi, flashlandı.
+2. Seri log: **`reason=201` (NO_AP_FOUND)** sürekli tekrarladı — ESP "BYOD"
+   SSID'sini TARAMA aşamasında bile bulamıyordu (MAC taklidi devreye
+   girmeden önce tıkanıyordu).
+3. Kullanıcı laptobunun BYOD'a bağlıyken hangi bantta olduğunu kontrol etti:
+   **5GHz**. Klasik ESP32 (D0WD-V3, DevKitV1) donanımsal olarak SADECE
+   2.4GHz destekliyor — hiçbir yazılım/config ayarıyla çözülemez.
+4. **Karar: BYOD yolu tamamen kapandı.** Kod (`SPOOF_MAC`) silinmedi çünkü
+   ileride 2.4GHz bir MAC-filtreli ağ çıkarsa işe yarayabilir, ama şu an
+   `sdkconfig.defaults.local`'de `CONFIG_SPOOF_MAC=""` (pasif).
+
+⚠️ **Çakışma uyarısı (hâlâ geçerli, ileride tekrar denenirse):** MAC spoof
+kullanılacaksa, o MAC'in gerçek sahibi (kullanıcının laptobu) AYNI ANDA aynı
+ağda OLMAMALI (iki cihaz aynı MAC = çakışma). Laptobu farklı bir ağa (ör.
+telefon hotspot) alıp ESP'yi BYOD'a bağlamak gerekir.
+
+#### B) Tek-ESP32 + telefon hotspot denemesi (teknik olarak ÇALIŞIYOR ama TERK EDİLDİ)
+
+BYOD kapanınca ara adım olarak: tek ESP32'yi doğrudan telefon hotspot'una
+("Furkan iPhone" / `frk21wrk`) bağlayıp test ettik.
+
+**Bağlantı:** `sdkconfig.defaults.local`'i `SSID="Furkan iPhone"` yapıp
+flashladık → bağlandı, RSSI -39 ile -48 arası, IP `172.20.10.12` aldı.
+
+**Hız sorunu ve KÖK NEDEN ANALİZİ (önemli, tekrar düşmemek için):**
+- İlk ölçüm: sadece **~8.3-8.9 Hz**. `CONFIG_PACKET_RATE=100` ayarlı, ESP'nin
+  kendi üstündeki `socket_transmitter_sta_loop` görevi ("flood", gateway'e
+  UDP gönderiyor) da çalışıyordu ("sending frames." logu görüldü) — ama hıza
+  hiç yansımadı.
+- **Yanlış ipucu (denendi, işe yaramadı):** Serideki `<ba-add> ... winSize:64`
+  logundan "AMPDU blok-ACK agregasyonu paketleri topluyor, ACK sayısını
+  azaltıyor" diye şüphelenildi. `CONFIG_ESP32_WIFI_AMPDU_TX_ENABLED=n` ile
+  kapatılıp yeniden flashlandı → **hiçbir fark yaratmadı** (hâlâ ~8.9 Hz).
+  Bu değişiklik geri alındı (config'te kalmadı).
+- **Gerçek kök neden (Bölüm 3.8'de zaten belgeliydi, unutulmuştu):**
+  **CSI, ESP32'nin GÖNDERDİĞİ değil ALDIĞI çerçevelerden üretilir.** ESP'nin
+  kendi flood'u (STA→gateway) bu yüzden anlamsız — CSI'yi artırmıyor, sadece
+  gönderdiği paketleri sayıyor. Asıl çözüm **laptop'tan ESP'nin IP'sine**
+  paket yağdırmak (`analysis/packet_flooder.py`, ESP'nin RECEIVE ettiği
+  paket sayısını artırır).
+- **Doğrulama:** `packet_flooder.py`'yi laptoptan ESP'nin IP'sine
+  (`172.20.10.12:2223`, 250 paket/sn) çalıştırınca hız **102-127 Hz**'e
+  çıktı (RSSI -39 ile -52 arası, iki ayrı ölçümde tutarlı).
+
+**Neden yine de terk edildi:** Bu kurulum teknik olarak çalışsa da:
+1. Dünkü 2-ESP mimarisi zaten **kanıtlanmış** (%85-87 yürüme doğruluğu,
+   gerçek veriyle), tek-ESP için böyle bir doğrulama yok.
+2. Yöneticinin kendi önerdiği mimari zaten 2-ESP (Bölüm 0'ın altı).
+3. 2-ESP, odanın iki farklı hattını tarıyor (uzamsal çeşitlilik) — tek ESP
+   sadece telefon-ESP arasındaki tek hatta bağımlı.
+
+**Yan tartışma (fizik, ileride tekrar sorulursa diye not):** Kullanıcı flood
+paketlerinin insan-vücudu-engelleme etkisini bozup bozmadığını sordu. Cevap:
+Hayır — CSI paketin İÇERİĞİNDEN değil, radyo dalgasının fiziksel kanaldan
+geçişinden hesaplanıyor; boş/dolu fark etmez, vücut aynı şekilde
+engelliyor/yansıtıyor. Flood sadece ölçüm SIKLIĞINI artırıyor, fiziği
+değiştirmiyor. Ayrıca "tek kart + telefon dip dibe masada dursa ne kadar
+alan ölçülür" sorusuna: bu HİÇ test edilmedi ama fizik olarak beklenti
+kötü — Tx/Rx çok yakınken güçlü doğrudan yol, zayıf ortam-yansımalarını
+"boğar" (monostatic/backscatter'a döner, bistatic blocking yerine); tahmin
+~1-2 metre güvenilir alan, doğrulanmadı.
+
+**"360 derece algılama" netleştirmesi (kullanıcı önceki oturumda farklı bir
+cevap almıştı, çelişki giderildi):** Anten yönsüz — sinyal gerçekten her
+yöne yayılıyor (bu doğru). Ama tek bir sabit noktadan (ESP) alınan CSI,
+sadece O NOKTAYA ulaşan sinyali (doğrudan yol + yansımalar) yansıtıyor.
+Yani "odanın her yerini EŞİT hassasiyette görür" YANLIŞ; "telefon-ESP
+hattına ve güçlü yansıma yollarına yakın hareketi iyi görür, uzak/gölgede
+kalan köşeleri zayıf görür" DOĞRU. Bu yüzden 2-ESP mimarisi (iki ayrı hat)
+tek-ESP'den fiziksel olarak daha güvenilir.
+
+#### C) Dünkü 2-ESP UDP mimarisine dönüş ve doğrulama (2026-08-25)
+
+**Kod durumu doğrulandı:** `git log` kontrol edildi — HEAD (`e53d47c`) zaten
+`0c5d109` ("hotspot 2 esp ile canlı testler") + üzerine sadece
+`live_server_udp.py` eklenmiş halde duruyordu. Yani UDP mimarisinin TÜM
+kodu (`csi_udp_server.py`, `csi_udp_component.h`, `guided_capture_udp.py`,
+`evaluate_udp_session.py` vb.) bozulmadan, olduğu gibi mevcuttu — hiçbir
+şey geri yüklemeye gerek kalmadı, sadece firmware config'i çevirip iki
+kartı yeniden flashlamak yeterliydi.
+
+**Yapılanlar:**
+1. `sdkconfig.defaults.local` → `SSID="Furkan iPhone"`, `SPOOF_MAC=""`,
+   **`SEND_CSI_TO_SERIAL=n`, `SEND_CSI_TO_UDP=y`** olarak ayarlandı.
+2. İki kart da (`/dev/cu.usbserial-0001` = STA-9d9c, `/dev/cu.usbserial-3`
+   = STA-85b0) bu ayarla flashlandı, ikisinde de "Hash of data verified"
+   ile tam tamamlandı (yarım flash riski yok).
+3. **İlk doğrulama denemesi BAŞARISIZ oldu: "0 kart" bulundu.** Teşhis:
+   laptop, macOS'un otomatik ağ tercihiyle **ofis WiFi'sine** (`172.70.x.x`,
+   5GHz, WPA2-Enterprise) geri kaymıştı — ESP'ler telefon hotspot'unda
+   (`172.20.10.x`) kalmıştı, iki taraf da farklı ağdaydı, discovery broadcast'i
+   hiç ulaşmadı. `ipconfig getifaddr en0` ile yakalandı.
+4. Kullanıcı laptobu elle "Furkan iPhone"ya bağladı (`172.20.10.6`).
+5. **Doğrulama BAŞARILI:** `csi_udp_server.py --duration 15` çalıştırıldı →
+   iki kart da bulundu, veri akıttı:
+   - `STA-85b0` (172.20.10.13): başlangıçta 98-100 Hz, ortalama 48.9 Hz
+   - `STA-9d9c` (172.20.10.12): başlangıçta 114-125 Hz, ortalama 45.3 Hz
+   - (Hız zamanla düşüyor — muhtemelen iki kart aynı hotspot bant
+     genişliğini paylaşıyor; dünkü "130-190 Hz" muhtemelen anlık/tek-kart
+     zirvesiydi. Bu normal, kanıtlanmış hareket tespiti eşiği zaten bu
+     hız aralığında çalışıyordu.)
+
+**⚠️ YENİ TUZAK (bu oturumda ilk kez yaşandı, listeye eklendi — Bölüm 6):**
+macOS, tercih sırasına göre bilinen bir ağı (ör. kurumsal WiFi) telefon
+hotspot'undan daha yüksek öncelikli görüp **otomatik olarak ona geçebilir**,
+laptop hotspot'tan sessizce kopar. `csi_udp_server.py` "0 kart" derse İLK
+kontrol edilecek şey: `ipconfig getifaddr en0` ile laptobun GERÇEKTEN hangi
+ağda olduğunu doğrulamak (ESP'lerin IP'siyle aynı /28 alt ağda mı?).
+
+**Şu anki fiziksel durum:** İki kart da HÂLÂ USB'ye takılı (laptoptan güç
+alıyor, flash için gerekliydi). Bir sonraki adım: USB'den çıkarıp 5V
+adaptörlere takmak, odanın iki ucuna yerleştirmek, telefonu ortaya koymak
+— firmware ayarları flash'ta kalıcı olduğu için güç kaynağı değişimi
+hiçbir ayarı bozmaz.
+
+---
+
+### 🎙️ SESLİ YÖNLENDİRMELİ VERİ TOPLAMA — TAM FORMAT REFERANSI (güncel, UDP mimarisi)
+
+Bu proje boyunca tüm etiketli veri, kronometre yerine **bilgisayar sesli
+komutuyla** toplandı (kronometre senkron hatası ilk denemede veriyi
+kullanılamaz hale getirmişti — bkz. Bölüm 5.1). Güncel (2-ESP UDP) mimaride
+kullanılacak script: **`analysis/guided_capture_udp.py`**.
+
+**Mekanizma:**
+1. `CsiUdpServer` başlatılır (discovery broadcast + flood otomatik döner,
+   arka planda thread).
+2. `--settle-sec` (varsayılan 6 sn) kadar beklenir, kartların bulunması
+   için. Bulunamazsa `SystemExit` ile hata verir ("kartlar açık mı, hotspot'a
+   bağlı mı, laptop aynı ağda mı" kontrol ettirir).
+3. Geri sayım: `say -v Yelda` ile "Hazır ol" → 2 sn → "3" → "2" → "1"
+   (her sayı arası 1 sn), bloklamadan (`subprocess.Popen`, konuşma süresi
+   zamanlamayı kaydırmaz).
+4. Her faz başında (`t0 + i*phase_sec` anında) o fazın komutu SESLİ
+   SÖYLENİR (`speak(cue)`) ve **o anki laptop saati** (`time.time()`)
+   `recv_ts_start` olarak kaydedilir.
+5. Bitişte "Bitti" söylenir, 0.5 sn beklenir (son paketler gelsin diye),
+   `srv.save()` ile CSV'ler yazılır.
+
+**Neden ESP saati DEĞİL laptop saati kullanılıyor (kritik fark, eski
+`guided_capture.py`'den ayrılan nokta):** İki kartın saatleri BAĞIMSIZ
+(her biri kendi açılışından beri sayıyor, ortak referans yok). UDP
+sunucusu her satırın laptoba ULAŞTIĞI anı zaten `recv_time` sütununa
+yazıyor — bu ortak eksen olarak kullanılıyor. Ağ gecikmesi (birkaç ms)
+3 saniyelik geçiş paylarının yanında ihmal edilebilir.
+
+**Çıktı formatı:**
+- `<output>_STA-9d9c.csv`, `<output>_STA-85b0.csv` — her kart için ayrı CSV,
+  başlık: `type,role,mac,rssi,rate,sig_mode,mcs,bandwidth,smoothing,
+  not_sounding,aggregation,stbc,fec_coding,sgi,noise_floor,ampdu_cnt,
+  channel,secondary_channel,local_timestamp,ant,sig_len,rx_state,
+  real_time_set,real_timestamp,len,CSI_DATA,recv_time` (son sütun YENİ,
+  eski ayrıştırıcılarla uyumluluk için SONA eklendi).
+- `<output>.json` — faz meta verisi:
+  ```json
+  {
+    "phase_sec": 12,
+    "cues": ["otur", "ayakta", "otur", ...],
+    "postures": ["otur", "ayakta"],
+    "phases": [
+      {"phase": 0, "posture": "otur", "label": 0,
+       "recv_ts_start": 1755999999.123, "recv_ts_end": 1756000011.456},
+      ...
+    ],
+    "files": {"STA-9d9c": "...", "STA-85b0": "..."},
+    "note": "recv_ts_* laptop saati; CSV'nin son sutunu recv_time ayni saat"
+  }
+  ```
+
+**Kullanım örnekleri:**
+```bash
+# Varsayılan: otur/ayakta dönüşümlü, 12 faz x 12 sn
+python guided_capture_udp.py --output ../data/udp_session/test
+
+# Özel komut listesi (virgülle ayrılmış, sırayla söylenir)
+python guided_capture_udp.py --cues "kıpırdama,yürü,kıpırdama,yürü" \
+    --phase-sec 10 --output ../data/udp_session/hareket_teshis
+
+# Faz süresi ve bekleme ayarlanabilir
+python guided_capture_udp.py --phases 9 --phase-sec 15 \
+    --settle-sec 10 --output ../data/udp_session/konum_degisken
+```
+
+**Değerlendirme:** `analysis/evaluate_udp_session.py` — `parse_udp_csv()`,
+`phase_windows()`, `logo_accuracy()` fonksiyonlarıyla kaydedilen JSON+CSV'yi
+okuyup LeaveOneGroupOut doğruluğu hesaplıyor, tek kart vs iki kart
+birleşimini karşılaştırıyor.
+
+**Bugüne kadar bu formatla toplanan ve klasörlenen veriler**
+(`data/udp_session/`, `README.md` içeriyor):
+- `20260824_hareket_teshis` — yürüme %85-87 ile ayrışıyor (KANITLANMIŞ, ✅)
+- `20260824_durus_konum_degisken` — otur/ayakta %40-46 (şans altı, KRİTİK
+  NEGATİF bulgu — Bölüm 0'ın altındaki "EN KRİTİK BULGU"na bak)
+- `20260824_hareket_turu` + `_02` — hareketin TÜRÜNÜ (yerinde mi, yer
+  değiştirerek mi) ayırt etme denendi, İKİ TEKRARDA DA başarısız (enerji
+  oranı ~1.0x, "kayma" ölçüsü iki testte ters yön verdi: 1.22x vs 0.66x)
+  — **bu ayrım şu an mümkün değil, tekrar denenmeden önce yeni bir yöntem
+  fikri gerekiyor.**
+
+---
+
+### 🚀🚀 2026-08-24 (AKŞAM): UDP mimarisine geçildi
 
 **Yönetici önerisi üzerine mimari değişti.** Artık kartlar USB kablosuna bağlı değil.
 
@@ -496,6 +728,9 @@ yukarıdaki başarısızlıklar ölçüm kaynaklı değil, fiziksel.
 | Flood işe yaramıyor | Sinyal zayıf (−77 dBm), paketler ulaşmıyor | RSSI > −70 dBm olmalı; modeme yaklaş |
 | Flood işe yaramıyor (2) | **Laptop ve ESP32 farklı ağlarda** | İkisi de aynı ağda olmalı; `Got ip` satırından ESP32'nin IP'sini doğrula |
 | Seri port meşgul | `live_server.py` arka planda çalışıyor | `pkill -f "live_server.py"` (dikkat: `python3 live_server.py` kalıbı eşleşmiyor) |
+| ESP32 5GHz ağa bağlanamıyor (`reason=201`, NO_AP_FOUND) | Klasik ESP32 (D0WD-V3) donanımsal olarak SADECE 2.4GHz destekliyor | Çözümü yok — ağın 2.4GHz SSID'sini kullan (ofis ağı 5GHz-only ise o ağ tamamen kapalı, MAC spoof bile kurtarmaz) |
+| ESP'nin kendi flood'u (`socket_transmitter_sta_loop`, STA→gateway) CSI hızını artırmıyor | CSI ALINAN çerçevelerden üretilir, GÖNDERİLENDEN değil — ESP kendi gönderdiği paketten CSI çıkaramaz | Laptoptan ESP'nin IP'sine paket gönder (`packet_flooder.py` veya `csi_udp_server.py`'nin dahili flood'u) |
+| **`csi_udp_server.py` "0 kart" buluyor ama kartlar hotspot'a bağlı** | macOS, bilinen bir ağı (ör. kurumsal WiFi) telefon hotspot'undan önceliklendirip laptobu SESSİZCE ona geçiriyor — laptop ve kartlar farklı ağda kalıyor | `ipconfig getifaddr en0` ile laptobun GERÇEK IP'sini kontrol et; ESP'lerin aldığı IP ile aynı /28 alt ağda değilse laptobu elle hotspot'a geri bağla |
 
 ---
 
