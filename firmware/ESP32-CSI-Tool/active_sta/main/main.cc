@@ -83,6 +83,36 @@ static const bool has_second_network = (ESP_WIFI_SSID_2[0] != '\0');
 static uint8_t active_network_idx = 0; // 0 = birinci ağ, 1 = ikinci ağ
 static int consecutive_fail_count = 0;
 
+// MAC adresi taklidi (spoofing). Ofis ağı (BYOD) erişimi cihazın MAC'ine göre
+// veriyor; laptobun kayıtlı MAC'ini ESP'ye çakınca ESP de yetkili görünüyor.
+// DİKKAT: laptobun O ANDA aynı ağda olMAMAlı (aynı MAC iki cihazda = çakışma).
+// Gerçek MAC sdkconfig.defaults.local'de (git'e girmez).
+static bool parse_mac(const char *str, uint8_t out[6]) {
+    int v[6];
+    if (sscanf(str, "%x:%x:%x:%x:%x:%x",
+               &v[0], &v[1], &v[2], &v[3], &v[4], &v[5]) != 6) return false;
+    for (int i = 0; i < 6; i++) out[i] = (uint8_t) v[i];
+    return true;
+}
+
+static void apply_spoof_mac() {
+#ifdef CONFIG_SPOOF_MAC
+    const char *m = CONFIG_SPOOF_MAC;
+    if (m[0] == '\0') return;                 // boşsa dokunma, gerçek MAC kalır
+    uint8_t mac[6];
+    if (!parse_mac(m, mac)) {
+        ESP_LOGE(TAG, "SPOOF_MAC ayrıştırılamadı: %s", m);
+        return;
+    }
+    esp_err_t r = esp_wifi_set_mac(WIFI_IF_STA, mac);
+    if (r == ESP_OK) {
+        ESP_LOGI(TAG, "MAC taklidi ayarlandı: %s", m);
+    } else {
+        ESP_LOGE(TAG, "esp_wifi_set_mac hata: %d", r);
+    }
+#endif
+}
+
 static void apply_wifi_credentials(uint8_t idx) {
     wifi_config_t wifi_config = {};
     wifi_config.sta.channel = WIFI_CHANNEL;
@@ -187,6 +217,7 @@ void station_init() {
                                                         &instance_got_ip));
 
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
+    apply_spoof_mac();  // credentials'tan ve start'tan ÖNCE
     apply_wifi_credentials(active_network_idx);
     ESP_ERROR_CHECK(esp_wifi_start());
 

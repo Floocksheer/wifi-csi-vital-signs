@@ -32,6 +32,15 @@ menu "ESP32 CSI Tool Config"
         help
             İkinci ağın şifresi.
 
+    config SPOOF_MAC
+        string "Spoof MAC address (boş = gerçek MAC)"
+        default ""
+        help
+            Bu değer boş değilse ESP32 WiFi MAC'ini buna ayarlar
+            (ör. 4e:bd:9f:62:b7:fc). Ofis ağı erişimi MAC'e göre veriyorsa,
+            yetkili bir cihazın MAC'ini buraya yazınca ESP de bağlanabilir.
+            DİKKAT: o cihaz aynı ağda AYNI ANDA olmamalı (çakışma olur).
+
     config PACKET_RATE
         int "Packet TX Rate"
         default "100"
