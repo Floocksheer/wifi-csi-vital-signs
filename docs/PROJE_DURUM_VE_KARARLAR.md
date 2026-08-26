@@ -1,15 +1,142 @@
 # Proje Durumu, Kararlar ve Denenenler
 ### Yeni bir sohbet/oturum bu dosyayı okuyarak projeyi devralabilir
 
-**Son güncelleme:** 25 Ağustos 2026
+**Son güncelleme:** 25 Ağustos 2026 (akşam - yürüme modeli + otur/ayakta kapanışı + yeniden düzenleme)
 **Depo:** `~/Documents/GitHub/wifi-csi-vital-signs` (GitHub: `Floocksheer/wifi-csi-vital-signs`, private)
-**Diğer dokümanlar:** `PROJE_SUNUM.md` (sunum için), `RuView_CSI_Proje_Plani.md` (detaylı faz planı)
+**Diğer dokümanlar:** `PROJE_SUNUM.md` (sunum için), `OTUR_AYAKTA_VERI_TOPLAMA_PLANI.md` (yükseklik hipotezi + protokol), `RuView_CSI_Proje_Plani.md` (detaylı faz planı)
 
 ---
 
 ## 0. HIZLI BAŞLANGIÇ (yeni oturumda ilk okunacak)
 
-### 🚀🚀🚀 2026-08-25: BYOD/MAC-spoof denemesi kapandı, dünkü 2-ESP UDP mimarisine GERİ DÖNÜLDÜ — EN GÜNCEL
+### 🏁🏁🏁 2026-08-25 (AKŞAM): Yürüme MODELİ çalışıyor, OTUR/AYAKTA KAPANDI — EN GÜNCEL
+
+**Özet (30 saniyede):** Kartlar 5V adaptöre alınıp odanın uçlarına, ofis
+sandalyelerinin kafalıklarına (~1 m) yerleştirildi. Gün boyu otur/ayakta
+ayrımı için **altı ayrı yöntem** denendi; **altısı da tekrarda çöktü** — bu
+ayrım bu donanımda **kapandı** (sayılarla detay: Bölüm 3.9). Buna karşılık
+elle eşik yerine **eğitilmiş bir yürüme modeli** yazıldı ve canlı arayüz
+tamamen ona geçirildi: Leave-One-**Session**-Out ile **%92.9 faz doğruluğu**,
+**kalibrasyon adımı YOK**. Ayrıca kullanılmayan 16 script + 2 ölü model ve
+~3.1 GB veri ayrı klasörlere **taşındı (silinmedi)**.
+
+#### Canlı arayüzün şu anki hali (`analysis/live_server_udp.py`)
+
+| Gösterge | Nasıl üretiliyor | Güvenilirlik |
+|---|---|---|
+| **YÜRÜYOR / DURUYOR** | Eğitilmiş model (`models/walking_model.joblib`) | ✅ %92.9 faz bazında |
+| oturuyor / ayakta | **Ölçülmüyor** — geçişlerden TAKİP ediliyor (durum makinesi) | ⚠️ kayabilir, arayüzden elle düzeltilir |
+| nefes / nabız | `bpm_pipeline.py`, bantgeçiren + FFT | nefes ✅ (Bölüm 3.2), nabız ⚠️ (Bölüm 3.3) |
+
+Çalıştırma:
+```bash
+cd analysis && source venv/bin/activate && python3 live_server_udp.py --start ayakta
+# http://localhost:5050  |  durdurmak icin: pkill -f "live_server_udp.py"
+```
+
+**Soğuk başlatma doğrulandı (2026-08-25):** taşımalardan ve `__pycache__`
+temizliğinden sonra sıfırdan başlatıldı, iki karttan da veri geldi
+(507 / 529 paket), kalibrasyon istemedi, doğru tahmin üretti.
+
+#### A-2) 🎬 İKİ ARAYÜZ VAR (2026-08-26)
+
+| Dosya | Port | Ne için |
+|---|---|---|
+| `live_server_udp.py` | 5050 | **B planı.** Sade, yazı tabanlı. Sunum çökerse buna dön. |
+| `live_view_udp.py` | **5051** | **Gösterim arayüzü.** RuView tarzı sahne: insan figürü, kart noktaları, canlı sinyal hattı. |
+
+**`live_view_udp.py`, `live_server_udp.py`'yi import eder ve onun
+`processing_loop`'unu çalıştırır** — yani ikisi AYNI beyni kullanıyor, asla
+farklı tahmin gösteremezler. Sade arayüzün kodu hiç değiştirilmedi.
+
+⚠️ **İKİSİ AYNI ANDA ÇALIŞAMAZ** — ikisi de UDP 2223'e bağlanıp kartlara
+talip olur. `live_view_udp.py` bunu önden kontrol edip anlaşılır bir hata
+verir; `live_server_udp.py` ise çıplak `OSError: Address already in use`
+fırlatır. Önce çalışanı durdur:
+```bash
+pkill -f live_server_udp.py    # veya live_view_udp.py
+```
+
+**Sahnede figürün YATAY yeri KONUM DEĞİLDİR.** Bu donanım konum ölçemez
+(kart başına 1 anten, faz bozuk, Bölüm 3.9). Figürün yeri her kartın kendi
+hareket enerjisinin kendi sakin tabanına oranından türetilen "bozulma
+dengesi"dir; ekranda da böyle yazıyor. Uydurma koordinat üretmemek için
+bilerek böyle etiketlendi.
+
+#### A) ✅ Yürüme modeli — projenin teslim edilebilir çıktısı
+
+`analysis/train_walking_model.py` → `analysis/models/walking_model.joblib`
+
+| | Değer |
+|---|---|
+| Eğitim verisi | 8 etiketli oturum, **2288 pencere** (509 yürüyor / 1779 yürümüyor) |
+| Pencere / adım | 3.0 sn / 0.5 sn (canlı sistemle **aynı**) |
+| Model | RandomForest, `class_weight="balanced"` |
+| Doğrulama | **Leave-One-Session-Out** (model o oturumu hiç görmedi) |
+| **Faz bazında doğruluk** | **%92.9** |
+| Yumuşatılmış pencere / tek pencere | %86.9 / %85.1 |
+| Şans seviyesi (çoğunluk sınıfı) | %77.8 |
+
+Oturum bazında (tek pencere / yumuşatılmış / faz):
+```
+20260824_hareket_teshis         70.0%  69.4%   8/12 faz
+20260824_hareket_turu           80.3%  79.7%  15/18 faz
+20260824_hareket_turu_02        83.7%  85.3%  15/18 faz
+20260824_durus_konum_degisken   85.2%  82.0%  17/17 faz
+posture_v2/coupling_test        85.2%  83.6%  14/16 faz
+posture_v2/s1_P1 / slow1 / slow2   (tek sinif)  100% / 97.1% / 96.8%
+```
+
+**Neden bu model eski yaklaşımların düştüğü tuzağa düşmüyor — 11 özelliğin
+tamamı ÖLÇEKTEN BAĞIMSIZ:** bant enerji *oranları* (6 bant), log
+sinyal/gürültü oranı, spektral merkez, değişim katsayısı, lag-1
+otokorelasyon, aktif alt-taşıyıcı oranı. Mutlak genlik **hiç
+kullanılmıyor** — çünkü mutlak genlik oturumdan oturuma kayıyor ve bu
+projedeki bütün büyük başarısızlıkların kaynağı tam olarak oydu
+(Bölüm 3.7: sınıf farkı 0.30, 2 saatlik ortam kayması 1.70).
+
+En önemli özellikler: `spektral_merkez` 0.224, `bant_3.0_6.0` 0.131,
+`bant_12.0_25.0` 0.126, `log_sinyal_gurultu` 0.120.
+
+**Yan kazanım:** Model kol sallamayı (olasılık 0.08-0.14) yürümeden
+(0.86-0.90) ayırıyor. Eski enerji eşiği bunu yapamıyordu — ikisi de
+"hareket" görünüyordu.
+
+**Özellik kodu `analysis/activity_features.py` içinde
+(`walking_features()`), eğitim ve canlı sunucu AYNI fonksiyonu çağırıyor.**
+Bilerek böyle: iki yerde ayrı yazılırsa eğitimle canlı davranış sessizce
+ayrışır.
+
+#### B) ❌ Otur/ayakta — altı yöntemin hepsi çöktü, KAPANDI
+
+Detaylı sayılar ve neden'i **Bölüm 3.9**'da. Özet: duruş farkı SABİT bir
+seviye farkı; sabit farklar donanım sürüklenmesiyle (AGC, sıcaklık, TX güç
+uyarlaması) tam olarak aynı yerde yaşıyor, ayrıştırılamıyor.
+
+**Canlı arayüzde ne yapıldı:** duruş ölçülmüyor, **takip ediliyor**. Kısa
+hareket patlaması (0.5-4 sn) + seviye adımı = geçiş → durumu çevir.
+**Yürüyüş bitince durum zorla AYAKTA'ya çekiliyor** — bu kesin bilgi, çünkü
+her yürüyüş ayakta biter; yani her yürüyüş durum makinesini sıfırlıyor ve
+hata birikmesini engelliyor. Kayarsa arayüzdeki düğmeyle elle düzeltilir
+(`POST /posture/<oturuyor|ayakta>`).
+
+#### C) 🗂️ Veri ve script yeniden düzenlemesi (hiçbir şey SİLİNMEDİ)
+
+| Klasör | İçerik |
+|---|---|
+| `analysis/` | **9 aktif script** + `models/walking_model.joblib` |
+| `analysis/kullanilmayan_scriptler/` | 16 script + 2 ölü model + `README.md` |
+| `data/udp_session/`, `data/posture_v2/` | **Aktif eğitim seti** (75 M + 107 M) |
+| `data/kullanilmayan_veriler/` | ~3.1 G (Kaggle setleri, seri port dönemi verisi) + `README.md` |
+
+⚠️ `data/` klasörü `.gitignore`'da — oradaki dosyaların **git'te yedeği YOK**.
+Her iki `README.md` de hangi verinin hangi dokümante sonucun kaynağı
+olduğunu ve taşınan scriptleri tekrar çalıştırmak için gereken yol
+düzeltmelerini yazıyor.
+
+---
+
+### 🚀🚀🚀 2026-08-25: BYOD/MAC-spoof denemesi kapandı, dünkü 2-ESP UDP mimarisine GERİ DÖNÜLDÜ
 
 **Özet (30 saniyede):** Bugün yönetici ofis WiFi'sine (BYOD, MAC filtreli) MAC
 taklidiyle bağlanmayı denedik — donanımsal engel yüzünden (BYOD 5GHz, klasik
@@ -209,6 +336,15 @@ yazıyor — bu ortak eksen olarak kullanılıyor. Ağ gecikmesi (birkaç ms)
   }
   ```
 
+**2026-08-25'te eklenen bayraklar (ikisi de acı deneyimden doğdu):**
+
+| Bayrak | Ne işe yarıyor | Neden eklendi |
+|---|---|---|
+| `--jitter N --seed K` | Faz süresine ±N sn rastgelelik katar | **Sabit süre = sahte başarı.** Kişi komut zamanını öğrenip hazırlanıyor; zirve gecikmesi farkı FİZİK sanılıyor. Jitter eklenince o "ayrım" buharlaştı. Bkz. Bölüm 3.9 |
+| `--position P1` | Kişinin durduğu noktayı JSON'a yazar | Konum etiketi olmadan doğru doğrulama **yapılamıyor**: gruplar faza göre ayrılırsa aynı konumun başka fazı eğitimde kalır, model duruş yerine konumu ezberler. Leave-One-**Position**-Out buna muhtaç |
+| `--height CM` | Kartların yerden yüksekliği | Geometri değişince veriler BİRLİKTE eğitilemez |
+| `--session tur1` | Oturum kimliği | Oturumlar arası kaymayı ayırmak için (Bölüm 3.7) |
+
 **Kullanım örnekleri:**
 ```bash
 # Varsayılan: otur/ayakta dönüşümlü, 12 faz x 12 sn
@@ -218,18 +354,33 @@ python guided_capture_udp.py --output ../data/udp_session/test
 python guided_capture_udp.py --cues "kıpırdama,yürü,kıpırdama,yürü" \
     --phase-sec 10 --output ../data/udp_session/hareket_teshis
 
-# Faz süresi ve bekleme ayarlanabilir
-python guided_capture_udp.py --phases 9 --phase-sec 15 \
-    --settle-sec 10 --output ../data/udp_session/konum_degisken
+# ⭐ ÖNERİLEN: koşullar etiketli + jitter'lı (geçiş verisi için ZORUNLU)
+python guided_capture_udp.py --cues "otur,ayakta,otur,ayakta" \
+    --phase-sec 12 --jitter 3 --seed 1 \
+    --position P1 --height 150 --session tur1 \
+    --output ../data/posture_v2/tur1_P1
 ```
+
+⚠️ `speak()` artık `voice.py`'de (eskiden `guided_capture.py`'nin içindeydi;
+modern UDP araçları sırf 4 satır için tüm seri-port mimarisini import ediyordu).
 
 **Değerlendirme:** `analysis/evaluate_udp_session.py` — `parse_udp_csv()`,
 `phase_windows()`, `logo_accuracy()` fonksiyonlarıyla kaydedilen JSON+CSV'yi
 okuyup LeaveOneGroupOut doğruluğu hesaplıyor, tek kart vs iki kart
 birleşimini karşılaştırıyor.
 
-**Bugüne kadar bu formatla toplanan ve klasörlenen veriler**
-(`data/udp_session/`, `README.md` içeriyor):
+**Bu formatla toplanan AKTİF veriler — yürüme modelinin eğitim seti**
+
+`data/posture_v2/` (2026-08-25, kartlar ~1 m, sandalye kafalıklarında):
+
+- `s1_P1` — otur/ayakta, tek konum (P1)
+- `coupling_test` — kişinin hatta ne kadar bağlı olduğu ölçüldü: yürüme
+  enerji oranı **1.78x / 3.35x** → kişi hatta NET görünüyor ("bağlı değil"
+  hipotezi bu kayıtla çürütüldü)
+- `slow1` / `slow2` — YAVAŞ otur/kalk, jitter'lı. Yöntem 6'nın hem %100'ü
+  hem %56'sı buradan çıktı (Bölüm 3.9)
+
+`data/udp_session/` (2026-08-24):
 - `20260824_hareket_teshis` — yürüme %85-87 ile ayrışıyor (KANITLANMIŞ, ✅)
 - `20260824_durus_konum_degisken` — otur/ayakta %40-46 (şans altı, KRİTİK
   NEGATİF bulgu — Bölüm 0'ın altındaki "EN KRİTİK BULGU"na bak)
@@ -340,6 +491,12 @@ sonuç bile tamamen yanlış olabilir.
 
 ### ✅ ÇALIŞAN: hareket/yürüme tespiti (UDP mimarisi, 2026-08-24 akşam)
 
+⚠️ **GÜNCEL DEĞİL — bu bölüm tarihseldir.** Aşağıdaki eşik yöntemi
+2026-08-25'te **eğitilmiş modelle değiştirildi** (%92.9 faz doğruluğu,
+kalibrasyon yok). Eşik yönteminin iki kusuru vardı: (a) kalibrasyona
+bağımlıydı ve kalibrasyon anı sakin değilse sistem tamamen ölüyordu,
+(b) kol sallamayı yürümeden ayıramıyordu. Güncel yöntem: Bölüm 0 / A.
+
 | Ölçüm | Değer |
 |---|---|
 | Yürüme / hareketsiz enerji oranı | **1.72x** |
@@ -360,7 +517,7 @@ güvenilir. **Projenin sağlam teslim edilebilir çıktısı budur.**
 (Yukarıdaki UDP mimarisi bunun yerini aldı. Yedek yapılandırma:
 `active_sta/sdkconfig.defaults.local.apbak`. Aşağıdaki bilgiler tarihsel.)
 
-### 🚀 2026-08-24: 2. ESP32 kuruldu — mimari değişti (en güncel durum)
+### 🚀 2026-08-24: 2. ESP32 kuruldu — mimari değişti (TARİHSEL, UDP mimarisi bunun yerini aldı)
 Artık **iki kart** var, laptop bağlantısı olmadan çalışan bir AP+STA çifti:
 - **Board A** (orijinal kart, MAC `d4:e9:f4:a4:9d:9c`) — `active_sta` firmware'i,
   laptopa USB ile bağlı, **CSI toplayan ve seri porttan veri gönderen kart**.
@@ -395,28 +552,44 @@ export CMAKE_POLICY_VERSION_MINIMUM=3.5     # modern CMake + eski ESP-IDF uyumu 
 cd ~/Documents/GitHub/wifi-csi-vital-signs/analysis && source venv/bin/activate
 ```
 
-### Sık kullanılan komutlar (UDP mimarisi - GÜNCEL)
+### Sık kullanılan komutlar (2026-08-25 itibarıyla GÜNCEL)
 ```bash
-# 1) Kartların bağlı olduğunu ve hızı doğrula (kartlar adaptörde, USB gerekmez)
-cd analysis && python3 csi_udp_server.py --duration 15
-#    Beklenen: iki kart da görünmeli, 130-190 Hz
+cd analysis && source venv/bin/activate
 
-# 2) Veri kaydet
-python3 csi_udp_server.py --duration 20 --output ../data/xxx
-#    -> ../data/xxx_STA-9d9c.csv ve ../data/xxx_STA-85b0.csv
+# 1) GÖSTERİM ARAYÜZÜ (asıl gösterilecek şey) - kalibrasyon adımı YOK
+python3 live_view_udp.py --start ayakta         # http://localhost:5051
+pkill -f "live_view_udp.py"                     # durdurmak için
 
-# 3) Firmware yükleme (SADECE ayar değişince - kartı USB'ye takman gerekir)
-cd firmware/ESP32-CSI-Tool/active_sta
+# 1b) B PLANI: sade arayüz (AYNI ANDA DEĞİL - ikisi de UDP 2223'e bağlanır)
+python3 live_server_udp.py --start ayakta       # http://localhost:5050
+
+# 2) Kartların bağlı olduğunu ve hızı doğrula (kartlar adaptörde, USB gerekmez)
+python3 csi_udp_server.py --duration 15
+#    Beklenen: iki kart da görünmeli, ~45-190 Hz (paylaşımlı bant, dalgalanır)
+
+# 3) Yürüme modelini yeniden eğit (özellik/veri değişirse ŞART)
+python3 train_walking_model.py                  # -> models/walking_model.joblib
+
+# 4) Etiketli veri topla (geçiş verisinde --jitter ZORUNLU, bkz. Bölüm 3.9)
+python3 guided_capture_udp.py --cues "kıpırdama,yürü,kıpırdama,yürü" \
+    --phase-sec 12 --jitter 3 --seed 1 --position P1 --height 150 \
+    --session tur1 --output ../data/posture_v2/tur1_P1
+
+# 5) Firmware yükleme (SADECE ayar değişince - kartı USB'ye takman gerekir)
+cd ../firmware/ESP32-CSI-Tool/active_sta
 rm -f sdkconfig sdkconfig.old && idf.py build
 idf.py -p /dev/cu.usbserial-X -b 115200 flash    # -b 115200 ŞART
 #    Çıktıda 3x "Hash of data verified" + "Leaving..." GÖRÜLMELİ
 ```
 ⚠️ Kartlar hotspot'a bağlanmıyorsa: telefonda *Kişisel Erişim Noktası →
 Maksimum Uyumluluk* açık mı? Laptop da AYNI hotspot'ta mı?
+(`ipconfig getifaddr en0` ile doğrula.)
 
-**ESKİ (seri port) komutları** - sadece USB mimarisine dönülürse geçerli:
-`capture_csi.py`, `guided_capture.py`, `calibrate_live.py`, `live_server.py`
-hâlâ seri porttan okuyor; UDP mimarisine uyarlanmaları gerekiyor.
+**ESKİ (seri port) komutları** — `capture_csi.py`, `guided_capture.py`,
+`calibrate_live.py`, `live_server.py` artık
+`analysis/kullanilmayan_scriptler/` içinde ve hâlâ seri porttan okuyorlar.
+Sadece USB mimarisine dönülürse geçerli; o klasördeki `README.md`
+çalıştırma yollarını anlatıyor.
 
 ### Donanım gerçekleri
 | | Board A (STA, veri) | Board B (AP, sadece yayın) |
@@ -454,8 +627,9 @@ tespit etmek. Yönetici tarafından verilen bir iş; ilham kaynağı [RuView](ht
 ### Karar 2: ESP-IDF v4.3 (v5.x değil)
 **Neden:** ESP32-CSI-Tool bu sürümü gerektiriyor. Modern macOS'ta kurulumu 6 ayrı sorun çıkardı (çözümler Bölüm 6'da).
 
-### Karar 3: Duruş sınıflandırma modeli SADECE otur/ayakta ile eğitiliyor
-**Neden:** İki aşamalı mimari — "ani hareket" tespiti eşikle (fizik) yapılıyor, modele bırakılmıyor. Model sadece kişi hareketsizken çalıştırılıyor (eğitim verisi de öyleydi).
+### Karar 3: ~~Duruş sınıflandırma modeli SADECE otur/ayakta ile eğitiliyor~~ → İPTAL
+**Eski karar (2026-08-19):** İki aşamalı mimari — "ani hareket" tespiti eşikle (fizik), duruş ayrımı modele.
+**İPTAL EDİLDİ (2026-08-25):** Tam tersi oldu. Duruş ayrımı bu donanımda yapılamıyor (Bölüm 3.9), buna karşılık HAREKET tespiti eşikten alınıp **modele** verildi. Yani roller yer değiştirdi: model yürümeyi öğreniyor, duruş ise ölçülmüyor (geçişlerden takip ediliyor).
 
 ### Karar 4: Uzuv/poz (iskelet) takibi ERTELENDİ
 **Neden:** RuView'in hazır modeli (HuggingFace `ruvnet/wifi-densepose-mmfi-pose`) **3 anten × 114 alt-taşıyıcı × 100 Hz** gerektiriyor. Bizde 1 anten var — yazılımla çözülemez.
@@ -576,6 +750,93 @@ Canlı testte model sürekli "AYAKTA" dedi (%94 güvenle). Teşhis:
 
 ---
 
+### 3.9 ⛔ OTUR/AYAKTA: ALTI YÖNTEM, ALTISI DA ÇÖKTÜ (2026-08-25) — DOSYA KAPANDI
+
+**Bu bölümün amacı:** Yeni bir oturum "acaba şunu denesek mi" diye aynı
+fikirlere geri dönmesin. Her satır GERÇEKTEN denendi ve GERÇEKTEN çöktü.
+Çökme biçimi hep aynı: **bir ölçümde umut verdi, tekrarında ya kayboldu ya
+işaret değiştirdi.**
+
+| # | Yöntem | İlk ölçüm | Tekrarda ne oldu |
+|---|---|---|---|
+| 1 | Postural sway (dinamik salınım) | — | %39.6, binom **p=0.92** (tamamen rastgele) |
+| 2 | Mutlak desen (ML, tüm alt-taşıyıcılar) | sabit konumda %70-74 | konum serbestken **%40-46** (şans %50'nin ALTI) |
+| 3 | "Kayma" ölçüsü (yer değiştirme enerjisi) | 1.22x | tekrarda **0.66x** — iki kart birbirini yalanladı |
+| 4 | Faz-arası seviye adımı (Δseviye işareti) | işaretler `- - +` | tekrarda `+ + +` — işaret oturuma göre değişiyor |
+| 5 | Geçiş dalga şekli asimetrisi | **+1.25** | veri artınca **−0.70** — yön tamamen döndü |
+| 6 | Dar pencere önce/sonra farkı | slow1: **%100**, Cohen d=**3.50** | slow2 (aynı nokta, dakikalar sonra): **%56**, d=**0.32**, STA-85b0'da işaret TERS |
+
+**Yöntem 6 en çok umut vereni ve en öğreticisiydi:** geçiş anının hemen
+öncesi (−3.5…−0.5 sn) ile hemen sonrası (+1.0…+4.0 sn) medyanlarının farkı.
+İlk kayıtta kusursuz ayırdı. **Aynı kişi, aynı nokta, aynı kartlar, birkaç
+dakika sonra** tekrarlanınca çöktü. Yani sorun yöntemde değil, ölçülen
+büyüklüğün kendisinde.
+
+#### Neden — ölçülen sayılarla
+
+| Ölçüm | Değer |
+|---|---|
+| İki duruş **arasındaki** seviye farkı (85b0 / 9d9c) | **0.30 / 0.40** |
+| Aynı duruşun **kendi içindeki** yayılımı (85b0 / 9d9c) | **2.68 / 0.88** |
+
+Aranan sinyal, gürültünün **içinde kalıyor**. Yürüme neden çalışıyor da bu
+çalışmıyor sorusunun cevabı burada: yürümede fark zamanla değişen (0.3-3 Hz)
+bir salınım, filtreyle ayrılabiliyor. Duruş farkı ise **sabit bir seviye
+kayması** — ve sabit kaymalar donanım sürüklenmesiyle (AGC, sıcaklık, TX güç
+uyarlaması, hız uyarlaması) tam olarak aynı yerde yaşıyor. Onları
+birbirinden ayıracak hiçbir filtre yok.
+
+**Geçiş YÖNÜNÜ (oturdu mu kalktı mı) bulmanın tek temiz yolu Doppler
+işareti** — o da temiz FAZ istiyor. ESP32'nin fazı CFO/zamanlama
+kaymalarıyla bozuk (Bölüm 3.3'te ölçüldü). Ayrıca tek anten var, uzamsal
+çözünürlük yok; 2.4 GHz'de yarım dalga boyu 6 cm, yani **"aynı nokta" radyo
+için aynı nokta değil.**
+
+#### Elenen yan hipotezler (bunlar da kapandı)
+
+- **"Kişi hatta yeterince bağlı değil" (benim hipotezim) — YANLIŞ.** Bağlanma
+  testi (`data/posture_v2/coupling_test`) çürüttü: yürüme enerji oranı
+  **1.78x / 3.35x**, yani kişi hatta gayet net görünüyor. Doğru teşhis:
+  yürüme >> kol sallama >> otur/kalk geçişi. Sorun bağlantı değil, otur/kalk
+  hareketinin kendisinin küçüklüğü.
+- **"Kullanıcı komutları zamanında yapmıyor" — YANLIŞ.** Zamanlama denetimi
+  yapıldı: iki kartta da **0/20** statik pencerede kirlilik. Protokol
+  uygulaması temizdi, kabahat kullanıcıda değildi.
+- **"Yavaş hareket edersek bozulma görünür hale gelir" — kısmen doğru ama
+  yetmedi.** Yavaş kalkma/oturma zirveyi büyüttü (yöntem 6'nın ilk %100'ü
+  buradan geldi) ama tekrarlanabilirlik gelmedi.
+- **Kart yüksekliği 115 cm — işe yaramadı.** `probe_geometry.py` ile ölçüldü:
+  ayrım gücü Cohen **d = 0.45 / 0.88** (karar eşiği d ≥ 1.5 idi). Ama dikkat:
+  **bu yükseklik hipotezi ÇÜRÜTMEZ** — 115 cm oturan kişinin baş
+  hizasının ALTINDA ve kişi masa yüzünden hattan sapmıştı. Gerçek test
+  (~145-155 cm, sandalyenin iki yanında ~1.5 m) **hâlâ yapılmadı.**
+
+#### ⚠️ ÇOK ÖNEMLİ METODOLOJİK BULGU: sabit faz süresi = sahte başarı
+
+`h115` kaydında geçiş zirvesinin gecikmesi ölçüldü: **"otur" komutunda
+0.15-0.25 sn sonra, "ayakta" komutunda 2.5-3.75 sn sonra.** Muhteşem bir
+ayrım gibi görünüyordu. Gerçekte bu **fizik değil TEPKİ SÜRESİ** farkıydı —
+faz süreleri sabit olduğu için kişi bir sonraki komutun ne zaman geleceğini
+öğrenip hazırlanıyordu.
+
+Faz sürelerine rastgelelik (`--jitter`) eklenince **bu ayrım tamamen
+buharlaştı.** Yani jitter eklenmeseydi eğitim verisinde mükemmel çalışan,
+gerçek hayatta çöken bir "çözüm" bulmuş olacaktık.
+
+➡️ **Kural: geçiş verisi toplanırken `--jitter` ZORUNLU.**
+
+#### Bu dosya nasıl yeniden açılır
+
+Şu an denenmemiş **tek** kaldıraç: kartları **~145-155 cm**'e (oturan kişinin
+baş hizasının ÜSTÜ, ayaktaki gövdenin İÇİ) ve sandalyenin iki yanına ~1.5 m
+mesafeye almak. O geometride ilk Fresnel bölgesi ~±22 cm'e daralıyor ve
+engelleme neredeyse ikili (var/yok) hale geliyor.
+**Karar kapısı:** `probe_geometry.py` ile ölçülen Cohen d **≥ 1.5** çıkmazsa
+bu dosya bir daha açılmasın. Detaylı protokol:
+`docs/OTUR_AYAKTA_VERI_TOPLAMA_PLANI.md`.
+
+---
+
 ## 4. HANGİ ÖZELLİK ORTAM DEĞİŞİNCE BOZULUR? (kritik tablo)
 
 | Özellik | Yöntem | Ortam değişince | Neden |
@@ -585,6 +846,8 @@ Canlı testte model sürekli "AYAKTA" dedi (%94 güvenle). Teşhis:
 | Hareket var/yok | Enerji (ardışık fark) | ✅ Bozulmaz | Kendi geçmişiyle kıyaslıyor |
 | **Oturma/ayakta** | **ML (mutlak desen)** | ❌ **Bozulur** | Donmuş sinyalin şeklini ezberliyor, o şekil odaya özgü |
 | ~~Oturma/ayakta~~ | ~~ML (dinamik/postural sway)~~ | — | ❌ 2026-08-24: hiç çalışmıyor (%39.6, p=0.92). Bkz. Bölüm 5.1 |
+| ~~Oturma/ayakta~~ | ~~diğer 4 yöntem~~ | — | ⛔ 2026-08-25: **DOSYA KAPANDI**, altı yöntem de tekrarda çöktü. Bkz. Bölüm 3.9 |
+| **Yürüme var/yok** | **ML — ölçekten bağımsız spektral özellikler** | ✅ Bozulmaz | Mutlak genlik değil spektrumun ŞEKLİ; Leave-One-Session-Out %92.9 |
 
 **Genel kural:** *Değişimi* ölçen yöntemler ortamdan bağımsız, *mutlak deseni* ezberleyen yöntemler ortama bağımlı.
 
@@ -595,7 +858,13 @@ Dinamik özellikler ancak ölçtükleri fark gerçekten varsa işe yarar. Hareke
 
 ---
 
-## 5. SIRADAKİ PLAN (2026-08-19 itibarıyla, 2026-08-24'te mimari notu eklendi)
+## 5. SIRADAKİ PLAN — ⚠️ TARİHSEL (2026-08-19/24)
+
+> **Bu bölüm artık yol göstermiyor, kayıt amaçlı duruyor.** Aşağıdaki
+> "kalibrasyon stratejileri" otur/ayakta ayrımını kurtarmak içindi; o dosya
+> 2026-08-25'te kapandı (Bölüm 3.9) ve canlı sistemde kalibrasyon tamamen
+> kaldırıldı. **Güncel durum ve sıradaki adım için Bölüm 0'ın en üstüne
+> ve Bölüm 8'e bak.**
 
 **Güncelleme (2026-08-24):** 2. ESP32 AP mimarisi kuruldu ve doğrulandı (Bölüm 0),
 82-101 Hz native hız alınıyor. Aşağıdaki "145 Hz" referansları hotspot-flood
@@ -672,7 +941,9 @@ Kanıt: kol sallamak net görünüyor (2.44x) ama otur/ayakta geçişlerinin ço
 görünmüyor (guided_02'de 12 fazın sadece 2'sinde geçiş zirvesi var; buna karşılık
 bazı geçişler 8.05 gibi devasa değerler üretiyor - yani tutarsız).
 
-**Önerilen çözüm (henüz denenmedi, kullanıcıda uygun yer yoktu):** kartları ayaktayken
+**Önerilen çözüm — 2026-08-25 durumu:** ~1 m'e (sandalye kafalığı) ve 115 cm'e
+(`probe_geometry.py`) kaldırıldı, **ikisi de yetmedi** (d=0.45/0.88). Asıl hipotez
+olan ~145-155 cm hâlâ TEST EDİLMEDİ — bkz. Bölüm 3.9. Fikir şuydu: kartları ayaktayken
 göğüs hizasına (~140-150 cm) kaldırmak. O yükseklikte ayaktayken hat kesilir,
 otururken baş o seviyenin altında kalır → fizik olarak zorunlu büyük fark.
 
@@ -731,46 +1002,69 @@ yukarıdaki başarısızlıklar ölçüm kaynaklı değil, fiziksel.
 | ESP32 5GHz ağa bağlanamıyor (`reason=201`, NO_AP_FOUND) | Klasik ESP32 (D0WD-V3) donanımsal olarak SADECE 2.4GHz destekliyor | Çözümü yok — ağın 2.4GHz SSID'sini kullan (ofis ağı 5GHz-only ise o ağ tamamen kapalı, MAC spoof bile kurtarmaz) |
 | ESP'nin kendi flood'u (`socket_transmitter_sta_loop`, STA→gateway) CSI hızını artırmıyor | CSI ALINAN çerçevelerden üretilir, GÖNDERİLENDEN değil — ESP kendi gönderdiği paketten CSI çıkaramaz | Laptoptan ESP'nin IP'sine paket gönder (`packet_flooder.py` veya `csi_udp_server.py`'nin dahili flood'u) |
 | **`csi_udp_server.py` "0 kart" buluyor ama kartlar hotspot'a bağlı** | macOS, bilinen bir ağı (ör. kurumsal WiFi) telefon hotspot'undan önceliklendirip laptobu SESSİZCE ona geçiriyor — laptop ve kartlar farklı ağda kalıyor | `ipconfig getifaddr en0` ile laptobun GERÇEK IP'sini kontrol et; ESP'lerin aldığı IP ile aynı /28 alt ağda değilse laptobu elle hotspot'a geri bağla |
+| **Canlı sistem hiçbir şey algılamıyor, ibre hiç kıpırdamıyor** | Tek seferlik kalibrasyon, kalibrasyon anı sakin değilse tabanı şişiriyor (ölçüldü: taban **1.49**, gerçek değerler 0.56-0.98 → geçiş eşiği 1.31, gerçek geçişler 0.29-0.77 → HEPSİ reddedildi) | Tek seferlik kalibrasyona GÜVENME. Eşikler sürekli güncellenen yüzdeliklerden gelmeli (`ADAPT_WINDOW`), karar eğitilmiş modelden. `live_server_udp.py`'de artık kalibrasyon YOK |
+| **Sabit faz süresiyle toplanan geçiş verisi sahte "çözüm" üretiyor** | Kişi bir sonraki komutun ne zaman geleceğini öğrenip hazırlanıyor; zirve gecikmesi FİZİK değil TEPKİ SÜRESİ farkı oluyor (ölçüldü: "otur" 0.15-0.25 sn, "ayakta" 2.5-3.75 sn — jitter eklenince ayrım BUHARLAŞTI) | `guided_capture_udp.py --jitter 3 --seed N` kullan. Geçiş verisinde zorunlu |
+| **`mv own_activity_*.csv ...` hiçbir şey taşımadı, hata da vermedi** | zsh, tırnaksız değişkeni kelimelere BÖLMEZ (bash'ten farklı): `pat="*.csv"; mv $pat hedef/` glob'u genişletmez | Glob'u komutta DOĞRUDAN yaz (`mv own_activity_*.csv hedef/`), değişkene koyma. Taşımadan sonra `ls` ile SAY, çıktıya güvenme |
+| **`python3 -c "..."` içinde Türkçe metin: "character not in range" / JSON decode hatası** | zsh tırnak içi Unicode + kabuk kaçışları çakışıyor | `<<'PY' ... PY` heredoc kullan ve çıktıyı ASCII tut |
+| **STA-85b0 aniden 2-70 Hz'e düşüp sonra kendiliğinden düzeliyor** | Hotspot bant paylaşımı + RSSI eşiğe dayanıyor (düşüş anında **−69.1/−63.2 dBm**, sağlıklıyken −57.9/−57.5; belgeli arıza eşiği −70 dBm) | Kayıt öncesi `csi_udp_server.py --duration 15` ile hızı DOĞRULA. Düşükse kartı hotspot'a yaklaştır. Düşük hızlı kayıtla eğitme |
 
 ---
 
 ## 7. DOSYA HARİTASI
 
-```
-analysis/
-  activity_features.py           # Ortak: CSV parse (regex), özellik çıkarımı, hareket enerjisi, kayan pencere
-  bpm_pipeline.py                # Bandpass + zero-crossing/FFT BPM tahmini, faz birleştirme
-  packet_flooder.py              # ⭐ UDP flood (9.5 → 145 Hz), ESP IP tespiti
-  capture_csi.py                 # Veri toplama (flood otomatik açık)
-  live_server.py                 # ⭐ Canlı web gösterge (Flask, :5050)
-  save_activity_model.py         # Duruş modelini eğitip kaydeder
-  train_own_activity_classifier.py   # Kendi verimizle LOO değerlendirme
-  train_activity_classifier.py   # UT-HAR ile eğitim/değerlendirme
-  evaluate_heart_rate_synthetic.py   # Sentetik veriyle kalp atışı değerlendirme
-  evaluate_breathing_own_data.py     # Kendi verimizle nefes değerlendirme
-  evaluate_breathing_own_data_v2.py  # Faz/otokorelasyon denemesi (başarısız - kayıt amaçlı)
-  plot_breathing_signals.py      # Sinyal görselleştirme
-  models/activity_classifier.joblib  # Eğitilmiş duruş modeli
-  venv/                          # Python ortamı (git'e girmez)
+⚠️ **2026-08-25'te yeniden düzenlendi.** Kullanılmayan scriptler ve veriler
+ayrı klasörlere TAŞINDI (silinmedi). Aşağıdaki harita taşımadan SONRAKİ
+gerçek durumdur.
 
-data/                            # ⚠️ TAMAMI .gitignore'da (büyük dosyalar)
-  synthetic_vital_signs/         # Kaggle saur3x/wifi-sensing (2.2 GB)
-  ut_har_activity/               # Kaggle hylanj/wifi-csi-dataset-ut-har (854 MB)
-  own_breathing_*.csv            # Kendi nefes kayıtlarımız (düşük hız, hâlâ geçerli)
-  archive_lowrate/               # Eski düşük-hızlı aktivite verisi (format uyumsuz, kullanılmıyor)
-  README.md                      # Veri setlerinin kaynağı ve format notları
+```
+analysis/                          # ── AKTİF: 9 script ─────────────────
+  live_view_udp.py               # ⭐ GÖSTERİM arayüzü (Flask :5051) - insan figürlü sahne
+  live_server_udp.py             # ⭐ B PLANI: sade canlı gösterge (Flask :5050)
+  train_walking_model.py         # ⭐ Yürüme modelini eğitir + Leave-One-Session-Out doğrular
+  activity_features.py           # Ortak: CSV parse (regex), hareket enerjisi, walking_features()
+  bpm_pipeline.py                # Bandpass + zero-crossing/FFT BPM tahmini
+  csi_udp_server.py              # İki karttan UDP ile CSI toplar + besleme (flood) paketi gönderir
+  guided_capture_udp.py          # Sesli yönlendirmeli etiketli veri toplama
+  evaluate_udp_session.py        # Kaydedilen oturumu değerlendirir
+  probe_geometry.py              # Kart yüksekliği tarama aracı (Cohen d ölçer)
+  voice.py                       # speak() - sesli komut (eski guided_capture.py'den ayrıldı)
+  models/walking_model.joblib    # ⭐ Canlı arayüzün kullandığı TEK model
+  requirements.txt  venv/  plots/
+
+  kullanilmayan_scriptler/       # ── PASİF (16 script + 2 ölü model) ──
+    README.md                    # Her birinin ne olduğu + tekrar çalıştırma yolu
+    esp_port.py  capture_csi.py  guided_capture.py  live_server.py
+    evaluate_guided_session.py  evaluate_continuous_session.py
+    evaluate_ap_feasibility.py  packet_flooder.py
+    save_activity_model.py  train_own_activity_classifier.py  calibrate_live.py
+    train_activity_classifier.py  evaluate_heart_rate_synthetic.py
+    evaluate_breathing_own_data.py  evaluate_breathing_own_data_v2.py
+    plot_breathing_signals.py
+    models/activity_classifier.joblib  models/live_calibration.joblib
+
+data/                            # ⚠️ TAMAMI .gitignore'da - GİT'TE YEDEĞİ YOK
+  udp_session/                   # ⭐ AKTİF eğitim seti (75 M) - 4 oturum + README
+  posture_v2/                    # ⭐ AKTİF eğitim seti (107 M) - 4 oturum
+  kullanilmayan_veriler/         # PASİF ~3.1 G + README.md (neyin kaynağı olduğu yazılı)
+    synthetic_vital_signs/  ut_har_activity/     # Kaggle setleri (yeniden indirmek mobil veri yakar)
+    continuous_session/  own_activity_*.csv  own_breathing_*.csv
+    archive_lowrate/  geometry_probe/  udp_verify_test3_*.csv
+  README.md
 
 firmware/ESP32-CSI-Tool/
-  active_sta/main/main.cc        # ⭐ ÖZELLEŞTİRİLDİ: çift ağ + dinamik gateway IP
-  active_sta/main/Kconfig.projbuild  # ÖZELLEŞTİRİLDİ: ikinci ağ tanımları
-  active_sta/sdkconfig.defaults   # Ayarlar (placeholder WiFi - git'e girer)
-  active_sta/sdkconfig.defaults.local  # ⚠️ GERÇEK WiFi şifreleri - .gitignore'da (Board A, primary=ESP32_CSI_AP)
-  active_ap/sdkconfig.defaults    # ⭐ YENİ (2026-08-24): Board B'nin AP ayarları (SSID/şifre commit edilir, gerçek wifi değil)
-  _components/sockets_component.h # ÖZELLEŞTİRİLDİ: sabit IP yerine target_ip
+  active_sta/main/main.cc        # ⭐ ÖZELLEŞTİRİLDİ: dinamik gateway IP + PMF + SPOOF_MAC
+  active_sta/main/Kconfig.projbuild  # ÖZELLEŞTİRİLDİ: ikinci ağ, SEND_CSI_TO_UDP, SPOOF_MAC
+  active_sta/sdkconfig.defaults        # Ayarlar (placeholder WiFi - git'e girer)
+  active_sta/sdkconfig.defaults.local  # ⚠️ GERÇEK WiFi şifreleri - .gitignore'da
+  active_sta/sdkconfig.defaults.local.apbak  # Eski AP mimarisi yedeği
+  _components/csi_udp_component.h  # ⭐ CSI'yi UDP ile gönderir (kuyruk + ayrı görev)
+  _components/csi_component.h      # UDP kuyruğuna yazar, role sütununu MAC'ten üretir
+  _components/sockets_component.h  # ÖZELLEŞTİRİLDİ: sabit IP yerine target_ip
 
 docs/
-  PROJE_SUNUM.md                 # Sunum dokümanı
   PROJE_DURUM_VE_KARARLAR.md     # BU DOSYA
+  PROJE_SUNUM.md                 # Sunum dokümanı
+  OTUR_AYAKTA_VERI_TOPLAMA_PLANI.md  # ⭐ YENİ: yükseklik hipotezi + karar kapısı + protokol
   RuView_CSI_Proje_Plani.md      # Detaylı faz planı ve kronoloji
 activate_idf.sh                  # ESP-IDF ortamını tek satırda açar
 ```
@@ -778,6 +1072,27 @@ activate_idf.sh                  # ESP-IDF ortamını tek satırda açar
 ---
 
 ## 8. AÇIK KONULAR
+
+### 🎯 Sıradaki adım (2026-08-25 itibarıyla)
+
+**Sistem şu an gösterilebilir durumda:** canlı arayüz açılıyor, yürümeyi
+%92.9 doğrulukla tanıyor, nefes gösteriyor, kalibrasyon istemiyor. Final
+demo bu haliyle yapılabilir — tek uyarı, oturuyor/ayakta göstergesinin
+ÖLÇÜLMEDİĞİ, takip edildiği ve kayabileceği.
+
+Seçenekler (kullanıcı/yönetici kararı):
+
+| Seçenek | İş | Getiri |
+|---|---|---|
+| **A) Olduğu gibi teslim** | yok | Yürüme + nefes sağlam ve dürüstçe doğrulanmış |
+| **B) Yükseklik denemesi** | kartları ~145-155 cm'e, sandalyenin iki yanına ~1.5 m; `probe_geometry.py` ile Cohen d ölç | Otur/ayakta açılabilir. **Karar kapısı: d < 1.5 ise vazgeç** (Bölüm 3.9) |
+| **C) Yürüme modelini güçlendir** | daha çok oturum/konumla yeniden eğit | %92.9 → daha kararlı; en düşük oturum %70 (hareket_teshis) |
+
+⚠️ **Hangisi seçilirse seçilsin geçerli kural:** duruş sınıflandırmasıyla
+ilgili HİÇBİR sonuca, konum-değişken protokolle ve Leave-One-Session/Position-Out
+ile doğrulanmadan güvenilmeyecek. Bu projenin en pahalı dersi buydu.
+
+### Eski açık konular
 
 1. **Yöneticiye sorulacak:** "Öğretmen" derken ML'deki *teacher model* (bilgi damıtma) mı kastedildi? RuView'in kendi GitHub tartışmasında (issue #45) "kamera tabanlı öğretmen modeli" ifadesi geçiyor — bu ihtimali güçlendiriyor.
 2. **IEEE DataPort veri seti:** [Multi-Human HAR](https://ieee-dataport.org/documents/channel-state-information-dataset-multi-human-activity-recognition-indoor-environments) — ESP32-Nodemcu + ESP32-CSI-Toolkit ile toplanmış (tam bizim donanımımız), 80+ katılımcı. **Abonelik gerekiyor** — üniversite hesabıyla denenebilir.
