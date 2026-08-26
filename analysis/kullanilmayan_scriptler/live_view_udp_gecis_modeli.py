@@ -18,12 +18,14 @@ Hangi hat daha çok bozuluyorsa figür o tarafa kayar. Bu bir KONUM DEĞİL,
 "bozulma dengesi" - ekranda da böyle yazıyor. Kaba bir göstergedir ve
 kartların yakınında/uzağında olmakla karışabilir.
 
-Gerçekten güvenilir olan tek şey figürün DURUMU:
-  YÜRÜYOR   <- eğitilmiş model, Leave-One-Session-Out %92.9
-  AYAKTA / OTURUYOR <- ölçülmüyor, geçişlerden takip ediliyor (kayabilir)
-
-NOT (2026-08-26): geçiş modeli denendi (kullanilmayan_scriptler/
-live_view_udp_gecis_modeli.py) ama kullanıcı bu sürümü tercih etti.
+DURUM nasıl üretiliyor:
+  YÜRÜYOR           <- eğitilmiş yürüme modeli, Leave-One-Session-Out %92.9
+  AYAKTA / OTURUYOR <- eğitilmiş GEÇİŞ modeli (2026-08-26) + yürüme çıpası.
+      Duruşun kendisi hâlâ ÖLÇÜLMÜYOR - geçiş olayları takip ediliyor ve
+      yön "yürüyüş her zaman ayakta biter" kuralından geliyor.
+      Ölçülen: geçiş yakalama %68 (eski yüzdelik eşik: %8), yanlış alarm
+      0.2/dk, demo senaryosunda durum doğruluğu %88.7 (çıpasız %51.6).
+      Arada yürümeden çok kez oturup kalkarsan kayabilir - elle düzeltilir.
 
 Kullanım:
     python live_view_udp.py                  # http://localhost:5051
@@ -45,6 +47,14 @@ from activity_features import (movement_energy_bandpass, parse_amplitude_matrix,
                                walking_features)
 
 PORT = 5051
+TR_MODEL_PATH = pathlib.Path(__file__).parent / "models/transition_model.joblib"
+
+# --- yürüme (eğitilmiş model, %92.9 faz) ---
+W_WIN, W_ENTER, W_EXIT, W_SMOOTH = 3.0, 0.55, 0.40, 5
+# --- geçiş (eğitilmiş model) ---
+T_WIN, T_ENTER, T_EXIT, T_SMOOTH = 2.0, 0.60, 0.40, 3
+T_REFRAC = 4.0
+BASE_N, BASE_PCTL = 120, 40      # eğitimdekiyle BİREBİR aynı olmalı
 VIEW_SEC = 3.0            # kart detayı için pencere
 VIEW_UPDATE_SEC = 0.5
 MIN_PACKETS = 80
@@ -67,49 +77,131 @@ def line_rssi(lines):
     return int(np.median(vals)) if vals else None
 
 
-def detail_loop(srv):
-    """Kart başına canlı bozulma - SADECE görselleştirme için.
+def window(srv, role, sec, minpkt):
+    lines = srv.recent(role, sec)
+    if len(lines) < minpkt:
+        return None, len(lines)
+    amp = parse_amplitude_matrix("\n".join(lines))
+    if amp.shape[0] < minpkt:
+        return None, len(lines)
+    return amp, len(lines)
 
-    Karar (yürüme + duruş) live_server_udp.processing_loop'ta veriliyor;
-    burada model çıkarımı TEKRARLANMIYOR, sadece ucuz olan bantgeçiren
-    enerji hesaplanıyor.
+
+def decision_loop(srv, wbundle, tbundle, start_posture):
+    """Karar + görselleştirme tek döngüde.
+
+    live_server_udp'nin processing_loop'undan AYRI: orası geçişi yüzdelik
+    eşikle buluyor (ölçüldü: 49 geçişin 4'ü, %8). Burası eğitilmiş geçiş
+    modelini kullanıyor (%68 yakalama, yanlış alarm 0.2/dk) ve yürüme
+    çıpasıyla birleştiriyor -> demo senaryosunda %88.7 durum doğruluğu.
+    Sade arayüzün kodu bilerek değiştirilmedi, B planı olarak duruyor.
     """
-    hist = {}
+    wmodel, tmodel = wbundle["model"], tbundle["model"]
+    wprob_hist = deque(maxlen=W_SMOOTH)
+    tprob_hist = deque(maxlen=T_SMOOTH)
+    ratio_hist = {}                      # kart -> son enerjiler (taban için)
+    mean_ratio_hist = deque(maxlen=3)    # oran_onceki / oran_yukselis için
+    posture, walking, tr_on, last_ev = start_posture, False, False, 0.0
+    last_event = "hazır"
+
     while True:
         time.sleep(VIEW_UPDATE_SEC)
+        now = time.time()
+
+        with core.state_lock:
+            ov = core.state.pop("_override", None)
+        if ov:
+            posture, last_event = ov, f"elle ayarlandı -> {ov}"
+
         roles = sorted(srv.status())
-        out = {}
+        if not roles:
+            with core.state_lock:
+                core.state.update(connected=False, activity="kart yok")
+            continue
+
+        wprobs, ratios, specs, kartlar = [], [], [], {}
         for r in roles:
-            lines = srv.recent(r, VIEW_SEC)
-            if len(lines) < MIN_PACKETS:
-                out[r] = {"hz": round(len(lines) / VIEW_SEC, 1), "zayif": True}
+            amp3, n3 = window(srv, r, W_WIN, 80)
+            if amp3 is not None:
+                wprobs.append(float(wmodel.predict_proba(
+                    walking_features(amp3, amp3.shape[0] / W_WIN).reshape(1, -1))[0, 1]))
+            amp2, n2 = window(srv, r, T_WIN, 40)
+            if amp2 is None:
+                kartlar[r] = {"hz": round(n2 / T_WIN, 1), "zayif": True}
                 continue
-            amp = parse_amplitude_matrix("\n".join(lines))
-            if amp.shape[0] < MIN_PACKETS:
-                out[r] = {"hz": round(len(lines) / VIEW_SEC, 1), "zayif": True}
-                continue
-            fs = amp.shape[0] / VIEW_SEC
-            e = float(movement_energy_bandpass(amp, fs))
-            h = hist.setdefault(r, deque(maxlen=BASE_WINDOW))
+            fs = amp2.shape[0] / T_WIN
+            e = float(movement_energy_bandpass(amp2, fs))
+            h = ratio_hist.setdefault(r, deque(maxlen=BASE_N))
             h.append(e)
-            # Taban = kendi geçmişinin alt yarısı. Sabit eşik YOK - tek
-            # seferlik kalibrasyon bu projede bir kez sistemi tamamen
-            # öldürmüştü (Bölüm 6).
-            base = float(np.percentile(h, 40)) if len(h) >= 10 else e
-            out[r] = {"hz": round(fs, 1), "enerji": round(e, 2),
-                      "taban": round(base, 2),
-                      "oran": round(e / (base + 1e-9), 2),
-                      "rssi": line_rssi(lines), "zayif": False}
-        rs = [r for r in sorted(out) if not out[r].get("zayif")]
+            base = float(np.percentile(h, BASE_PCTL)) if len(h) >= 8 else e
+            ratio = e / (base + 1e-9)
+            ratios.append(ratio)
+            specs.append(walking_features(amp2, fs))
+            kartlar[r] = {"hz": round(fs, 1), "enerji": round(e, 2),
+                          "taban": round(base, 2), "oran": round(ratio, 2),
+                          "rssi": line_rssi(srv.recent(r, T_WIN)), "zayif": False}
+
+        if not ratios or not wprobs:
+            with core.state_lock:
+                core.state.update(connected=True, activity="veri bekleniyor")
+            with view_lock:
+                view["kartlar"] = kartlar
+            continue
+
+        # --- YÜRÜME ---
+        wprob_hist.append(sum(wprobs) / len(wprobs))
+        wp = float(np.mean(wprob_hist))
+        was_walking = walking
+        if walking and wp < W_EXIT:
+            walking = False
+        elif not walking and wp > W_ENTER:
+            walking = True
+        if walking and not was_walking:
+            last_event = f"yürüyor (olasılık {wp:.2f})"
+        elif was_walking and not walking:
+            # ÇIPA: yürüyüş her zaman ayakta biter. Ölçüldü: bu çıpa demo
+            # senaryosunda durum doğruluğunu %51.6'dan %88.7'ye çıkarıyor.
+            posture = "ayakta"
+            last_event = f"yürüyüş bitti -> ayakta (çıpa)"
+
+        # --- GEÇİŞ (eğitilmiş model) ---
+        col = np.array(ratios)
+        mean_ratio_hist.append(float(col.mean()))
+        rise = mean_ratio_hist[-1] - (mean_ratio_hist[-2] if len(mean_ratio_hist) > 1
+                                      else mean_ratio_hist[-1])
+        prev = mean_ratio_hist[0]
+        feat = np.concatenate([[col.mean(), col.max(), col.min(), rise, prev],
+                               np.mean(specs, axis=0)])
+        tprob_hist.append(float(tmodel.predict_proba(feat.reshape(1, -1))[0, 1]))
+        tp = float(np.mean(tprob_hist))
+
+        if not tr_on and tp > T_ENTER:
+            tr_on = True
+            if not walking and (now - last_ev) >= T_REFRAC:
+                posture = "ayakta" if posture == "oturuyor" else "oturuyor"
+                last_ev = now
+                last_event = f"geçiş (olasılık {tp:.2f}) -> {posture}"
+        elif tr_on and tp < T_EXIT:
+            tr_on = False
+
+        v = core.vitals(srv, roles)
+        with core.state_lock:
+            core.state.update(
+                connected=True, walking=walking, posture=posture,
+                activity="yuruyor" if walking else posture,
+                walk_prob=round(wp, 2), gecis_prob=round(tp, 2),
+                movement=round(float(col.mean()), 2),
+                breath=v["breath"], heart=v["heart"],
+                vitals_reliable=not walking, last_event=last_event)
+        rs = [r for r in sorted(kartlar) if not kartlar[r].get("zayif")]
         denge = 0.0
         if len(rs) == 2:
-            a = max(out[rs[0]]["oran"] - 1.0, 0.0)
-            b = max(out[rs[1]]["oran"] - 1.0, 0.0)
+            a = max(kartlar[rs[0]]["oran"] - 1.0, 0.0)
+            b = max(kartlar[rs[1]]["oran"] - 1.0, 0.0)
             if a + b > 0.05:
                 denge = (b - a) / (a + b)
         with view_lock:
-            out_kartlar = out
-            view["kartlar"] = out_kartlar
+            view["kartlar"] = kartlar
             view["denge"] = round(denge, 3)
 
 
@@ -239,7 +331,9 @@ button:hover{border-color:#2f81f7;color:#dce9fb}
     <div class="hr"></div>
     <div class="row"><span class="lbl">yürüme olasılığı</span><b id="wp">--</b></div>
     <div class="bar"><i id="wpbar"></i></div>
-    <div class="row" style="margin-top:7px"><span class="lbl">hareket</span><b id="mv">--</b></div>
+    <div class="row" style="margin-top:7px"><span class="lbl">geçiş olasılığı</span><b id="gp">--</b></div>
+    <div class="bar"><i id="gpbar" style="background:linear-gradient(90deg,#ffa94d,#ff6b8a)"></i></div>
+    <div class="row" style="margin-top:7px"><span class="lbl">hareket oranı</span><b id="mv">--</b></div>
   </div>
 </div>
 
@@ -411,6 +505,8 @@ async function poll(){
       'hareket var - ölçüm güvenilmez';
     document.getElementById('wp').textContent=(d.walk_prob??'--');
     document.getElementById('wpbar').style.width=((d.walk_prob||0)*100)+'%';
+    document.getElementById('gp').textContent=(d.gecis_prob??'--');
+    document.getElementById('gpbar').style.width=((d.gecis_prob||0)*100)+'%';
     document.getElementById('mv').textContent=(d.movement??'--');
     const ks=Object.keys(d.kartlar||{}).sort(); let h=''; live.oran=[1,1];
     ks.forEach((r,i)=>{const b=d.kartlar[r];
@@ -433,11 +529,17 @@ if __name__ == "__main__":
     args = ap.parse_args()
 
     if not core.MODEL_PATH.exists():
-        raise SystemExit(f"Model yok: {core.MODEL_PATH}\n"
+        raise SystemExit(f"Yürüme modeli yok: {core.MODEL_PATH}\n"
                          f"Önce çalıştır: python train_walking_model.py")
-    bundle = joblib.load(core.MODEL_PATH)
-    print(f"Model yüklendi: {core.MODEL_PATH.name} "
-          f"({len(bundle['features'])} özellik, pencere {bundle['win_sec']} sn)")
+    if not TR_MODEL_PATH.exists():
+        raise SystemExit(f"Geçiş modeli yok: {TR_MODEL_PATH}\n"
+                         f"Önce çalıştır: python train_transition_model.py")
+    wbundle = joblib.load(core.MODEL_PATH)
+    tbundle = joblib.load(TR_MODEL_PATH)
+    print(f"Yürüme modeli: {len(wbundle['features'])} özellik, "
+          f"pencere {wbundle['win_sec']} sn")
+    print(f"Geçiş modeli : {len(tbundle['features'])} özellik, "
+          f"pencere {tbundle['win_sec']} sn")
 
     # İki arayüz aynı anda çalışamaz: ikisi de UDP 2223'e bağlanmaya çalışır.
     # Çıplak OSError yerine ne yapması gerektiğini söyleyelim.
@@ -466,9 +568,7 @@ if __name__ == "__main__":
 
     with core.state_lock:
         core.state.update(posture=args.start, activity=args.start)
-    # Karar döngüsü live_server_udp'nin KENDİSİ - iki ekran aynı beyni kullanıyor.
-    threading.Thread(target=core.processing_loop, args=(srv, bundle, args.start),
-                     daemon=True).start()
-    threading.Thread(target=detail_loop, args=(srv,), daemon=True).start()
+    threading.Thread(target=decision_loop,
+                    args=(srv, wbundle, tbundle, args.start), daemon=True).start()
     print(f"\nSahne: http://localhost:{args.port}")
     app.run(host="0.0.0.0", port=args.port, debug=False)

@@ -49,6 +49,15 @@ SESSIONS = [
     ROOT / "data/posture_v2/s1_P1",
     ROOT / "data/posture_v2/slow1",
     ROOT / "data/posture_v2/slow2",
+    # --- 2026-08-26 eklendi: posture_v3 ---
+    # Besi dogrudan "bu yurume DEGIL" ornegi (saf otur/kalk), biri yurume
+    # iceriyor. Amac: otur/kalk gecislerinin yurume sanilmasini azaltmak.
+    ROOT / "data/posture_v3/tur1_P1_orta",
+    ROOT / "data/posture_v3/tur2_P2_kart_yakin",
+    ROOT / "data/posture_v3/tur3_P3_diger_kart_yakin",
+    ROOT / "data/posture_v3/tur3b_P3_diger_kart_yakin",
+    ROOT / "data/posture_v3/tur4_P4_hat_disi_yakin",
+    ROOT / "data/posture_v3/tur5_karisik_demo",
 ]
 
 
